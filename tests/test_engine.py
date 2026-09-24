@@ -18,7 +18,7 @@ async def test_engine_pipeline(tmp_path: Path) -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         checker = UsernameChecker(client, endpoint="https://example.test/check")
-        async with Storage(tmp_path / "nym.db", available_file=tmp_path / "available.txt") as storage:
+        async with Storage(\n            tmp_path / "nym.db",\n            available_file=tmp_path / "available.txt",\n        ) as storage:
             engine = ScanEngine(
                 checker,
                 storage,
