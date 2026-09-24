@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 from typing import Any
 
@@ -30,7 +29,7 @@ class UsernameChecker:
                 json={"username": username},
                 timeout=self.timeout,
             )
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        except httpx.RequestError as exc:
             return CheckResult(
                 username=username,
                 status=CheckStatus.NETWORK_ERROR,
@@ -38,12 +37,11 @@ class UsernameChecker:
             )
 
         if response.status_code == 429:
-            retry_after = self._retry_after(response)
             return CheckResult(
                 username=username,
                 status=CheckStatus.RATE_LIMITED,
                 http_status=response.status_code,
-                retry_after=retry_after,
+                retry_after=self._retry_after(response),
             )
 
         if response.status_code in {400, 422}:
@@ -104,8 +102,3 @@ class UsernameChecker:
             return max(0.0, float(raw))
         except (TypeError, ValueError):
             return None
-
-
-async def sleep_retry_after(result: CheckResult, *, fallback: float = 1.0) -> None:
-    if result.status is CheckStatus.RATE_LIMITED:
-        await asyncio.sleep(result.retry_after if result.retry_after is not None else fallback)
