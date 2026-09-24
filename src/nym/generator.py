@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import random
 import string
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 DEFAULT_CHARSET = string.ascii_lowercase + string.digits + "_."
 
@@ -65,7 +65,7 @@ def pattern(
 
 
 def dictionary(
-    words: Iterator[str],
+    words: Iterable[str],
     *,
     lowercase: bool = True,
     strip: bool = True,
