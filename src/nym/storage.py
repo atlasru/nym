@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS checked_usernames (
 );
 """
 
+_FINAL_STATUSES = {
+    CheckStatus.AVAILABLE,
+    CheckStatus.TAKEN,
+    CheckStatus.INVALID,
+}
+
 
 class Storage:
     def __init__(
@@ -86,20 +92,23 @@ class Storage:
                     result.error,
                 ),
             )
-            conn.execute(
-                """
-                INSERT INTO checked_usernames (username, last_status, checked_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(username) DO UPDATE SET
-                    last_status = excluded.last_status,
-                    checked_at = excluded.checked_at
-                """,
-                (
-                    result.username,
-                    result.status.value,
-                    result.checked_at.isoformat(),
-                ),
-            )
+
+            if result.status in _FINAL_STATUSES:
+                conn.execute(
+                    """
+                    INSERT INTO checked_usernames (username, last_status, checked_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(username) DO UPDATE SET
+                        last_status = excluded.last_status,
+                        checked_at = excluded.checked_at
+                    """,
+                    (
+                        result.username,
+                        result.status.value,
+                        result.checked_at.isoformat(),
+                    ),
+                )
+
             conn.commit()
 
             if result.status is CheckStatus.AVAILABLE and self.available_file is not None:
