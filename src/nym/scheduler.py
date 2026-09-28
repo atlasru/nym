@@ -29,6 +29,10 @@ class RateScheduler:
         self._lock = asyncio.Lock()
         self._next_at = 0.0
 
+    @property
+    def next_at(self) -> float:
+        return self._next_at
+
     async def wait(self) -> None:
         async with self._lock:
             now = time.monotonic()
@@ -40,3 +44,14 @@ class RateScheduler:
             if self.jitter:
                 spacing += self._rng.uniform(0.0, self.jitter)
             self._next_at = time.monotonic() + spacing
+
+    async def defer(self, delay: float) -> None:
+        """Push the global request window forward by ``delay`` seconds.
+
+        Used when the server returns Retry-After so every worker observes the
+        same cooldown instead of independently continuing to send requests.
+        """
+        if delay <= 0:
+            return
+        async with self._lock:
+            self._next_at = max(self._next_at, time.monotonic() + delay)
