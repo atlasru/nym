@@ -20,7 +20,7 @@ jobs:
   test:
     name: Python 3.13 / Windows
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -43,3 +43,16 @@ jobs:
 
       - name: Tests
         run: python -m pytest -q
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller
+
+      - name: Build Windows executable
+        run: python -m PyInstaller --noconfirm --clean --onefile --name nym --paths src nym_entry.py
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: nym-windows-x64
+          path: dist/nym.exe
+          if-no-files-found: error
