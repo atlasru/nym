@@ -3,27 +3,69 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+from collections import deque
 
 import httpx
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
+from textual.screen import Screen
 from textual.widgets import Button, Input, Label, RichLog, Select, Static
 
 from . import tui as legacy
 from .checker import UsernameChecker
-from .config import ScannerConfig, save_config
+from .config import AppPaths, ScannerConfig, load_config, save_config
 from .engine import ScanEngine
+from .models import CheckResult, CheckStatus
 from .proxy import ProxyPool
 from .runtime import build_usernames
 from .scheduler import RateScheduler
 from .storage import Storage
 
 
-class ScanSetupScreen(legacy.ScanSetupScreen):
-    """Scan setup with a permanently visible action bar."""
+class MainMenuScreen(Screen):
+    def compose(self) -> ComposeResult:
+        with Vertical(id="menu-card"):
+            yield Static("✦  NYM", classes="brand")
+            yield Static("fast, local username availability scanner", classes="muted")
+            yield Button("New scan", id="new-scan", variant="primary")
+            yield Button("Resume last config", id="resume")
+            yield Button("Results", id="results")
+            yield Button("Configuration", id="configuration")
+            yield Button("Proxies", id="proxies")
+            yield Button("Exit", id="exit")
+            yield Static("↑↓ navigate   enter select", classes="hint")
 
-    BINDINGS = legacy.BackScreen.BINDINGS + [("ctrl+enter", "start_scan", "Start scan")]
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        app = self.app
+        button_id = event.button.id
+        if button_id == "new-scan":
+            app.push_screen(ScanSetupScreen(copy.deepcopy(app.config.scanner)))
+        elif button_id == "resume":
+            app.push_screen(ScanScreen(copy.deepcopy(app.config.scanner), resume=True))
+        elif button_id == "results":
+            app.push_screen(legacy.ResultsScreen(app.paths.available))
+        elif button_id == "configuration":
+            app.push_screen(legacy.ConfigurationScreen())
+        elif button_id == "proxies":
+            app.push_screen(legacy.ProxyScreen())
+        elif button_id == "exit":
+            app.exit()
+
+
+class BackScreen(Screen):
+    BINDINGS = [("escape", "back", "Back")]
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
+class ScanSetupScreen(BackScreen):
+    BINDINGS = BackScreen.BINDINGS + [("ctrl+enter", "start_scan", "Start scan")]
+
+    def __init__(self, scanner: ScannerConfig) -> None:
+        super().__init__()
+        self.scanner = scanner
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="panel setup-panel"):
@@ -86,8 +128,7 @@ class ScanSetupScreen(legacy.ScanSetupScreen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
             self.app.pop_screen()
-            return
-        if event.button.id == "start":
+        elif event.button.id == "start":
             self.action_start_scan()
 
     def action_start_scan(self) -> None:
@@ -100,13 +141,55 @@ class ScanSetupScreen(legacy.ScanSetupScreen):
         save_config(self.app.paths.config, self.app.config)
         self.app.push_screen(ScanScreen(scanner))
 
+    def _read_scanner(self) -> ScannerConfig:
+        mode = str(self.query_one("#mode", Select).value)
+        limit_text = self.query_one("#limit", Input).value.strip()
+        scanner = ScannerConfig(
+            mode=mode,
+            length=int(self.query_one("#length", Input).value),
+            charset=self.query_one("#charset", Input).value,
+            pattern=self.query_one("#pattern", Input).value,
+            dictionary_file=self.query_one("#dictionary", Input).value,
+            workers=int(self.query_one("#workers", Input).value),
+            queue_size=int(self.query_one("#queue", Input).value),
+            interval=float(self.query_one("#interval", Input).value),
+            jitter=float(self.query_one("#jitter", Input).value),
+            seed=self.scanner.seed,
+            limit=int(limit_text) if limit_text else None,
+        )
+        legacy._validate_scanner(scanner)
+        return scanner
 
-class ScanScreen(legacy.ScanScreen):
-    """Scan dashboard driven by Textual's worker lifecycle."""
+
+class ScanScreen(Screen):
+    BINDINGS = [
+        ("space", "pause_resume", "Pause / resume"),
+        ("escape", "stop_or_back", "Stop / back"),
+    ]
 
     def __init__(self, scanner: ScannerConfig, *, resume: bool = False) -> None:
-        super().__init__(scanner, resume=resume)
+        super().__init__()
+        self.scanner = scanner
+        self.resume = resume
+        self.engine: ScanEngine | None = None
         self.scan_worker = None
+        self.started_at = 0.0
+        self.finished = False
+        self.current_username = "—"
+        self.result_times: deque[float] = deque()
+        self.activity_index = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="panel wide scan-panel"):
+            yield Static("✦  Nym scan", classes="title")
+            yield Static("Starting…", id="scan-status", classes="muted")
+            yield Static("", id="scan-stats")
+            yield Static("", id="hit-flash")
+            yield RichLog(id="scan-log", markup=True, wrap=True)
+            with Horizontal(classes="actions"):
+                yield Button("Pause", id="pause")
+                yield Button("Stop", id="stop", variant="error")
+                yield Button("Back", id="back", disabled=True)
 
     def on_mount(self) -> None:
         self.started_at = time.monotonic()
@@ -114,7 +197,7 @@ class ScanScreen(legacy.ScanScreen):
         self.query_one("#scan-status", Static).update("◌ Initializing scanner…")
         self.query_one("#scan-log", RichLog).write("[dim]Initializing scan…[/]")
         self.scan_worker = self.run_worker(
-            self._run_scan_fixed(),
+            self._run_scan(),
             name="nym-scan",
             group="scan",
             exclusive=True,
@@ -126,7 +209,40 @@ class ScanScreen(legacy.ScanScreen):
         if self.scan_worker is not None:
             self.scan_worker.cancel()
 
-    async def _run_scan_fixed(self) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id == "pause":
+            self.action_pause_resume()
+        elif button_id == "stop":
+            self._stop_scan()
+        elif button_id == "back" and self.finished:
+            self.app.pop_screen()
+
+    def action_pause_resume(self) -> None:
+        if self.engine is None or self.finished:
+            return
+        button = self.query_one("#pause", Button)
+        if self.engine.paused:
+            self.engine.resume()
+            button.label = "Pause"
+            self.query_one("#scan-status", Static).update("✦ Scanning")
+        else:
+            self.engine.pause()
+            button.label = "Resume"
+            self.query_one("#scan-status", Static).update("◇ Paused")
+
+    def action_stop_or_back(self) -> None:
+        if self.finished:
+            self.app.pop_screen()
+        else:
+            self._stop_scan()
+
+    def _stop_scan(self) -> None:
+        if self.engine is not None:
+            self.engine.stop()
+        self.query_one("#scan-status", Static).update("◌ Stopping…")
+
+    async def _run_scan(self) -> None:
         log = self.query_one("#scan-log", RichLog)
         proxy_pool: ProxyPool | None = None
         had_error = False
@@ -212,26 +328,54 @@ class ScanScreen(legacy.ScanScreen):
                 except NoMatches:
                     pass
 
+    def _record_result(self, result: CheckResult, log: RichLog) -> None:
+        self.current_username = result.username
+        now = time.monotonic()
+        self.result_times.append(now)
+        while self.result_times and now - self.result_times[0] > 5.0:
+            self.result_times.popleft()
 
-class MainMenuScreen(legacy.MainMenuScreen):
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        app = self.app
-        button_id = event.button.id
-        if button_id == "new-scan":
-            app.push_screen(ScanSetupScreen(copy.deepcopy(app.config.scanner)))
-        elif button_id == "resume":
-            app.push_screen(ScanScreen(copy.deepcopy(app.config.scanner), resume=True))
-        elif button_id == "results":
-            app.push_screen(legacy.ResultsScreen(app.paths.available))
-        elif button_id == "configuration":
-            app.push_screen(legacy.ConfigurationScreen())
-        elif button_id == "proxies":
-            app.push_screen(legacy.ProxyScreen())
-        elif button_id == "exit":
-            app.exit()
+        if result.status is CheckStatus.AVAILABLE:
+            log.write(f"[bold green]◆ AVAILABLE[/]  {result.username}")
+            flash = self.query_one("#hit-flash", Static)
+            flash.update(f"◆  AVAILABLE  {result.username}")
+            self.set_timer(0.65, lambda: flash.update(""))
+        elif result.status is CheckStatus.TAKEN:
+            log.write(f"[dim]· taken[/]      {result.username}")
+        elif result.status is CheckStatus.RATE_LIMITED:
+            log.write(f"[yellow]◇ rate limit[/] {result.username}")
+        elif result.status is CheckStatus.NETWORK_ERROR:
+            log.write(f"[red]× network[/]    {result.username}")
+        elif result.status is CheckStatus.INVALID:
+            log.write(f"[yellow]× invalid[/]    {result.username}")
+        else:
+            log.write(f"[red]× unknown[/]    {result.username}")
+
+    def _refresh_stats(self) -> None:
+        self.activity_index = (self.activity_index + 1) % len(legacy.ACTIVITY_FRAMES)
+        if self.engine is None:
+            return
+        stats = self.engine.stats
+        elapsed = max(0.001, time.monotonic() - self.started_at)
+        window = min(5.0, elapsed)
+        rate = len(self.result_times) / window if window > 0 else 0.0
+        activity = "◇" if self.engine.paused else legacy.ACTIVITY_FRAMES[self.activity_index]
+        proxy_text = "ON" if self.app.config.proxies.enabled else "OFF"
+        text = (
+            f"{activity}  {self.current_username}\n"
+            f"Checked {stats.checked:,}   Available {stats.available:,}   "
+            f"Taken {stats.taken:,}\n"
+            f"Invalid {stats.invalid:,}   "
+            f"Errors {stats.network_errors + stats.unknown:,}   "
+            f"429 {stats.rate_limited:,}\n"
+            f"Rate {rate:.1f}/s   Queue ≤ {self.scanner.queue_size}   "
+            f"Proxies {proxy_text}   Runtime {legacy._format_duration(elapsed)}"
+        )
+        self.query_one("#scan-stats", Static).update(text)
 
 
-class NymApp(legacy.NymApp):
+class NymApp(App[None]):
+    TITLE = "Nym"
     CSS = (
         legacy.NymApp.CSS
         + """
@@ -253,10 +397,14 @@ class NymApp(legacy.NymApp):
     )
 
     def __init__(self) -> None:
-        legacy.MainMenuScreen = MainMenuScreen
-        legacy.ScanSetupScreen = ScanSetupScreen
-        legacy.ScanScreen = ScanScreen
         super().__init__()
+        self.paths = AppPaths.discover()
+        self.paths.ensure()
+        self.config = load_config(self.paths.config)
+
+    def on_mount(self) -> None:
+        self.push_screen(MainMenuScreen())
+        self.push_screen(legacy.SplashScreen(self.config))
 
 
 def run_tui() -> None:
