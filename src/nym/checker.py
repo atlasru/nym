@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import Any
 
 import httpx
 
 from .models import CheckResult, CheckStatus
+from .proxy import ProxyPool, ProxyUnavailableError
 
 DEFAULT_ENDPOINT = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
 
@@ -17,23 +19,58 @@ class UsernameChecker:
         *,
         endpoint: str = DEFAULT_ENDPOINT,
         timeout: float = 10.0,
+        proxy_pool: ProxyPool | None = None,
     ) -> None:
         self.client = client
         self.endpoint = endpoint
         self.timeout = timeout
+        self.proxy_pool = proxy_pool
 
     async def check(self, username: str) -> CheckResult:
+        proxy = None
+        request_client = self.client
+        if self.proxy_pool is not None and self.proxy_pool.endpoints:
+            try:
+                proxy = await self.proxy_pool.acquire()
+            except ProxyUnavailableError as exc:
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.NETWORK_ERROR,
+                    error=str(exc),
+                )
+            if proxy is not None:
+                if proxy.client is None:
+                    return CheckResult(
+                        username=username,
+                        status=CheckStatus.NETWORK_ERROR,
+                        error="proxy client is not open",
+                    )
+                request_client = proxy.client
+
+        started = time.perf_counter()
         try:
-            response = await self.client.post(
+            response = await request_client.post(
                 self.endpoint,
                 json={"username": username},
                 timeout=self.timeout,
             )
         except httpx.RequestError as exc:
+            if proxy is not None and self.proxy_pool is not None:
+                await self.proxy_pool.report_error(proxy, exc)
             return CheckResult(
                 username=username,
                 status=CheckStatus.NETWORK_ERROR,
                 error=f"{type(exc).__name__}: {exc}",
+            )
+
+        latency_ms = (time.perf_counter() - started) * 1000
+        retry_after = self._retry_after(response) if response.status_code == 429 else None
+        if proxy is not None and self.proxy_pool is not None:
+            await self.proxy_pool.report_response(
+                proxy,
+                response.status_code,
+                latency_ms=latency_ms,
+                retry_after=retry_after,
             )
 
         if response.status_code == 429:
@@ -41,7 +78,7 @@ class UsernameChecker:
                 username=username,
                 status=CheckStatus.RATE_LIMITED,
                 http_status=response.status_code,
-                retry_after=self._retry_after(response),
+                retry_after=retry_after,
             )
 
         if response.status_code in {400, 422}:

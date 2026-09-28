@@ -40,9 +40,23 @@ class ScanEngine:
         self._queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=queue_size)
         self._results: asyncio.Queue[CheckResult] = asyncio.Queue()
         self._stop = asyncio.Event()
+        self._pause = asyncio.Event()
+        self._pause.set()
+
+    @property
+    def paused(self) -> bool:
+        return not self._pause.is_set()
+
+    def pause(self) -> None:
+        if not self._stop.is_set():
+            self._pause.clear()
+
+    def resume(self) -> None:
+        self._pause.set()
 
     def stop(self) -> None:
         self._stop.set()
+        self._pause.set()
 
     async def run(self, usernames: Iterable[str]) -> AsyncIterator[CheckResult]:
         producer = asyncio.create_task(self._produce(usernames), name="nym-producer")
@@ -67,6 +81,7 @@ class ScanEngine:
                 yield self._results.get_nowait()
         finally:
             self._stop.set()
+            self._pause.set()
             producer.cancel()
             for worker in workers:
                 worker.cancel()
@@ -78,6 +93,7 @@ class ScanEngine:
     async def _produce(self, usernames: Iterable[str]) -> None:
         try:
             for username in usernames:
+                await self._pause.wait()
                 if self._stop.is_set():
                     return
                 if await self.storage.contains(username):
@@ -96,6 +112,7 @@ class ScanEngine:
             try:
                 if username is None:
                     return
+                await self._pause.wait()
                 if self._stop.is_set():
                     return
 
@@ -109,6 +126,13 @@ class ScanEngine:
     async def _check_with_rate_limit_retry(self, username: str) -> CheckResult:
         attempts = 0
         while True:
+            await self._pause.wait()
+            if self._stop.is_set():
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.UNKNOWN,
+                    error="scan stopped",
+                )
             await self.scheduler.wait()
             result = await self.checker.check(username)
             if result.status is not CheckStatus.RATE_LIMITED:
