@@ -17,6 +17,7 @@ async def test_tui_boots_headless(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     app.config.interface.animations = False
 
     async with app.run_test() as pilot:
+        await asyncio.sleep(0.12)
         await pilot.pause()
         assert app.screen is not None
 
@@ -31,15 +32,18 @@ async def test_scan_setup_start_button_visible_in_small_terminal(
     app.config.interface.animations = False
 
     async with app.run_test(size=(100, 30)) as pilot:
-        await app.push_screen(ScanSetupScreen(ScannerConfig()))
+        await asyncio.sleep(0.12)
+        await pilot.click("#new-scan")
         await pilot.pause()
+
+        assert isinstance(app.screen, ScanSetupScreen)
         start = app.screen.query_one("#start", Button)
         assert start.region.height > 0
         assert 0 <= start.region.y < app.size.height
 
 
 @pytest.mark.asyncio
-async def test_scan_screen_actually_runs_engine(
+async def test_new_scan_button_starts_engine(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -52,7 +56,7 @@ async def test_scan_screen_actually_runs_engine(
 
     app = NymApp()
     app.config.interface.animations = False
-    scanner = ScannerConfig(
+    app.config.scanner = ScannerConfig(
         mode="sequential",
         length=2,
         charset="a",
@@ -62,10 +66,14 @@ async def test_scan_screen_actually_runs_engine(
         limit=1,
     )
 
-    async with app.run_test():
-        screen = ScanScreen(scanner)
-        await app.push_screen(screen)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await asyncio.sleep(0.12)
+        await pilot.click("#new-scan")
+        await pilot.pause()
+        await pilot.click("#start")
 
+        assert isinstance(app.screen, ScanScreen)
+        screen = app.screen
         for _ in range(40):
             await asyncio.sleep(0.05)
             if screen.engine is not None and screen.engine.stats.checked == 1:
