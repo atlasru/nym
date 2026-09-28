@@ -188,7 +188,20 @@ class ProxyPool:
                 except httpx.RequestError as exc:
                     await self.report_error(endpoint, exc)
                     return
+
                 latency_ms = (time.perf_counter() - started) * 1000
+                endpoint.latency_ms = latency_ms
+
+                # The Discord gateway endpoint should return 200. Previously any
+                # 4xx response was treated as a healthy proxy, which could make
+                # auth failures / blocked exits appear "valid" in the TUI.
+                if response.status_code != 200:
+                    await self.report_error(
+                        endpoint,
+                        RuntimeError(f"health check HTTP {response.status_code}"),
+                    )
+                    return
+
                 await self.report_response(
                     endpoint,
                     response.status_code,
