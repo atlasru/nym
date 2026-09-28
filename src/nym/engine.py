@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Iterable
 from contextlib import suppress
 
@@ -37,6 +38,8 @@ class ScanEngine:
         self.retry_fallback = retry_fallback
         self.max_rate_limit_retries = max_rate_limit_retries
         self.stats = ScanStats()
+        self.rate_limit_events = 0
+        self.rate_limit_until = 0.0
         self._queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=queue_size)
         self._results: asyncio.Queue[CheckResult] = asyncio.Queue()
         self._stop = asyncio.Event()
@@ -46,6 +49,10 @@ class ScanEngine:
     @property
     def paused(self) -> bool:
         return not self._pause.is_set()
+
+    @property
+    def rate_limit_remaining(self) -> float:
+        return max(0.0, self.rate_limit_until - time.monotonic())
 
     def pause(self) -> None:
         if not self._stop.is_set():
@@ -148,11 +155,17 @@ class ScanEngine:
             result = await self.checker.check(username)
             if result.status is not CheckStatus.RATE_LIMITED:
                 return result
+
+            self.rate_limit_events += 1
+            delay = result.retry_after if result.retry_after is not None else self.retry_fallback
+            delay = max(0.0, delay)
+            self.rate_limit_until = max(self.rate_limit_until, time.monotonic() + delay)
+            await self.scheduler.defer(delay)
+
             if attempts >= self.max_rate_limit_retries:
                 return result
 
             attempts += 1
-            delay = result.retry_after if result.retry_after is not None else self.retry_fallback
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
                 return CheckResult(
