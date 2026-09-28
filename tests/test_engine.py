@@ -1,3 +1,5 @@
+import asyncio
+import itertools
 from pathlib import Path
 
 import httpx
@@ -84,3 +86,30 @@ async def test_rate_limit_retries_then_succeeds(tmp_path: Path) -> None:
 
     assert calls == 2
     assert results[0].status is CheckStatus.AVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_stop_unblocks_full_queue(tmp_path: Path) -> None:
+    class SlowChecker:
+        async def check(self, username: str) -> CheckResult:
+            await asyncio.sleep(5)
+            return CheckResult(username, CheckStatus.TAKEN)
+
+    async with Storage(tmp_path / "nym.db") as storage:
+        engine = ScanEngine(
+            SlowChecker(),  # type: ignore[arg-type]
+            storage,
+            RateScheduler(0),
+            workers=1,
+            queue_size=1,
+        )
+
+        async def consume() -> None:
+            names = (f"u{number}" for number in itertools.count())
+            async for _ in engine.run(names):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        engine.stop()
+        await asyncio.wait_for(task, timeout=1.0)
