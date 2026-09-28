@@ -85,6 +85,7 @@ async def test_rate_limit_retries_then_succeeds(tmp_path: Path) -> None:
             results = [result async for result in engine.run(["free"])]
 
     assert calls == 2
+    assert engine.rate_limit_events == 1
     assert results[0].status is CheckStatus.AVAILABLE
 
 
