@@ -7,6 +7,7 @@ import time
 import httpx
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Button, Input, Label, RichLog, Select, Static
 
 from . import tui as legacy
@@ -202,11 +203,14 @@ class ScanScreen(legacy.ScanScreen):
 
             self.finished = True
             if self.is_mounted:
-                if not had_error and not was_cancelled:
-                    self.query_one("#scan-status", Static).update("✓ Finished")
-                self.query_one("#pause", Button).disabled = True
-                self.query_one("#stop", Button).disabled = True
-                self.query_one("#back", Button).disabled = False
+                try:
+                    if not had_error and not was_cancelled:
+                        self.query_one("#scan-status", Static).update("✓ Finished")
+                    self.query_one("#pause", Button).disabled = True
+                    self.query_one("#stop", Button).disabled = True
+                    self.query_one("#back", Button).disabled = False
+                except NoMatches:
+                    pass
 
 
 class MainMenuScreen(legacy.MainMenuScreen):
@@ -248,9 +252,11 @@ class NymApp(legacy.NymApp):
         """
     )
 
-    def on_mount(self) -> None:
-        self.push_screen(MainMenuScreen())
-        self.push_screen(legacy.SplashScreen(self.config))
+    def __init__(self) -> None:
+        legacy.MainMenuScreen = MainMenuScreen
+        legacy.ScanSetupScreen = ScanSetupScreen
+        legacy.ScanScreen = ScanScreen
+        super().__init__()
 
 
 def run_tui() -> None:
