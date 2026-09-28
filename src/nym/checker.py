@@ -43,7 +43,7 @@ class UsernameChecker:
                     return CheckResult(
                         username=username,
                         status=CheckStatus.NETWORK_ERROR,
-                        error="proxy client is not open",
+                        error=f"{proxy.display}: proxy client is not open",
                     )
                 request_client = proxy.client
 
@@ -57,10 +57,11 @@ class UsernameChecker:
         except httpx.RequestError as exc:
             if proxy is not None and self.proxy_pool is not None:
                 await self.proxy_pool.report_error(proxy, exc)
+            prefix = f"{proxy.display}: " if proxy is not None else ""
             return CheckResult(
                 username=username,
                 status=CheckStatus.NETWORK_ERROR,
-                error=f"{type(exc).__name__}: {exc}",
+                error=f"{prefix}{type(exc).__name__}: {exc}",
             )
 
         latency_ms = (time.perf_counter() - started) * 1000
@@ -89,11 +90,13 @@ class UsernameChecker:
             )
 
         if not 200 <= response.status_code < 300:
+            body = response.text[:256]
+            prefix = f"{proxy.display}: " if proxy is not None else ""
             return CheckResult(
                 username=username,
                 status=CheckStatus.UNKNOWN,
                 http_status=response.status_code,
-                error=response.text[:256],
+                error=f"{prefix}HTTP {response.status_code}: {body}",
             )
 
         try:
