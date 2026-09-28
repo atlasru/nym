@@ -343,7 +343,10 @@ class ScanScreen(Screen):
         elif result.status is CheckStatus.TAKEN:
             log.write(f"[dim]· taken[/]      {result.username}")
         elif result.status is CheckStatus.RATE_LIMITED:
-            log.write(f"[yellow]◇ rate limit[/] {result.username}")
+            retry = ""
+            if result.retry_after is not None:
+                retry = f" · retry after {result.retry_after:.1f}s"
+            log.write(f"[yellow]◇ rate limit[/] {result.username}{retry}")
         elif result.status is CheckStatus.NETWORK_ERROR:
             log.write(f"[red]× network[/]    {result.username}")
         elif result.status is CheckStatus.INVALID:
@@ -355,19 +358,30 @@ class ScanScreen(Screen):
         self.activity_index = (self.activity_index + 1) % len(legacy.ACTIVITY_FRAMES)
         if self.engine is None:
             return
+
         stats = self.engine.stats
-        elapsed = max(0.001, time.monotonic() - self.started_at)
+        now = time.monotonic()
+        elapsed = max(0.001, now - self.started_at)
+        while self.result_times and now - self.result_times[0] > 5.0:
+            self.result_times.popleft()
         window = min(5.0, elapsed)
         rate = len(self.result_times) / window if window > 0 else 0.0
         activity = "◇" if self.engine.paused else legacy.ACTIVITY_FRAMES[self.activity_index]
         proxy_text = "ON" if self.app.config.proxies.enabled else "OFF"
+        retry_remaining = self.engine.rate_limit_remaining
+
+        if retry_remaining > 0 and not self.engine.paused and not self.finished:
+            self.query_one("#scan-status", Static).update(
+                f"◇ Rate limited · retry in {retry_remaining:.1f}s"
+            )
+
         text = (
             f"{activity}  {self.current_username}\n"
             f"Checked {stats.checked:,}   Available {stats.available:,}   "
             f"Taken {stats.taken:,}\n"
             f"Invalid {stats.invalid:,}   "
             f"Errors {stats.network_errors + stats.unknown:,}   "
-            f"429 {stats.rate_limited:,}\n"
+            f"429 {self.engine.rate_limit_events:,}\n"
             f"Rate {rate:.1f}/s   Queue ≤ {self.scanner.queue_size}   "
             f"Proxies {proxy_text}   Runtime {legacy._format_duration(elapsed)}"
         )
