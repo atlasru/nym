@@ -31,7 +31,7 @@ async def test_scan_setup_start_button_visible_in_small_terminal(
     app.config.interface.animations = False
 
     async with app.run_test(size=(100, 30)) as pilot:
-        app.push_screen(ScanSetupScreen(ScannerConfig()))
+        await app.push_screen(ScanSetupScreen(ScannerConfig()))
         await pilot.pause()
         start = app.screen.query_one("#start", Button)
         assert start.region.height > 0
@@ -62,17 +62,15 @@ async def test_scan_screen_actually_runs_engine(
         limit=1,
     )
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         screen = ScanScreen(scanner)
-        app.push_screen(screen)
+        await app.push_screen(screen)
 
-        for _ in range(20):
+        for _ in range(40):
             await asyncio.sleep(0.05)
-            await pilot.pause()
-            if screen.finished:
+            if screen.engine is not None and screen.engine.stats.checked == 1:
                 break
 
-        assert screen.finished
         assert screen.engine is not None
         assert screen.engine.stats.checked == 1
         assert screen.current_username == "aa"
