@@ -67,6 +67,12 @@ class ScanEngine:
 
         try:
             while True:
+                if self._stop.is_set():
+                    producer.cancel()
+                    for worker in workers:
+                        worker.cancel()
+                    break
+
                 if producer.done() and all(worker.done() for worker in workers):
                     break
 
@@ -112,11 +118,15 @@ class ScanEngine:
             try:
                 if username is None:
                     return
+
                 await self._pause.wait()
                 if self._stop.is_set():
                     return
 
                 result = await self._check_with_rate_limit_retry(username)
+                if self._stop.is_set():
+                    return
+
                 await self.storage.save(result)
                 self.stats.record(result)
                 await self._results.put(result)
@@ -133,6 +143,7 @@ class ScanEngine:
                     status=CheckStatus.UNKNOWN,
                     error="scan stopped",
                 )
+
             await self.scheduler.wait()
             result = await self.checker.check(username)
             if result.status is not CheckStatus.RATE_LIMITED:
@@ -141,6 +152,13 @@ class ScanEngine:
                 return result
 
             attempts += 1
-            await asyncio.sleep(
-                result.retry_after if result.retry_after is not None else self.retry_fallback
-            )
+            delay = result.retry_after if result.retry_after is not None else self.retry_fallback
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.UNKNOWN,
+                    error="scan stopped",
+                )
+            except TimeoutError:
+                continue
