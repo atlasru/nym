@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     if not raw_args:
-        from .tui import run_tui
+        from .ui import run_tui
 
         run_tui()
         return
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args = build_parser().parse_args(raw_args)
     if args.command in {None, "tui"}:
-        from .tui import run_tui
+        from .ui import run_tui
 
         run_tui()
         return
