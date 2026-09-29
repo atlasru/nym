@@ -270,7 +270,7 @@ class ScanScreen(Screen):
                     await proxy_pool.health_check_all(
                         url="https://api.ipify.org?format=json",
                         concurrency=concurrency,
-                        timeout=20.0,
+                        request_timeout=20.0,
                     )
                     generic_status = {
                         endpoint.display: (
@@ -283,7 +283,7 @@ class ScanScreen(Screen):
                     await proxy_pool.health_check_all(
                         url="https://discord.com/api/v9/gateway",
                         concurrency=concurrency,
-                        timeout=20.0,
+                        request_timeout=20.0,
                     )
                     healthy = [
                         endpoint
@@ -370,7 +370,13 @@ class ScanScreen(Screen):
             self.finished = True
             if self.is_mounted:
                 try:
-                    if not had_error and not was_cancelled:
+                    if self.engine is not None and self.engine.rate_limit_blocked:
+                        remaining = self.engine.rate_limit_remaining
+                        duration = legacy._format_duration(remaining)
+                        self.query_one("#scan-status", Static).update(
+                            f"◇ Discord cooldown · retry in {duration}"
+                        )
+                    elif not had_error and not was_cancelled:
                         self.query_one("#scan-status", Static).update("✓ Finished")
                     self.query_one("#pause", Button).disabled = True
                     self.query_one("#stop", Button).disabled = True
@@ -396,7 +402,10 @@ class ScanScreen(Screen):
             retry = ""
             if result.retry_after is not None:
                 retry = f" · retry after {result.retry_after:.1f}s"
-            log.write(f"[yellow]◇ rate limit[/] {result.username}{retry}")
+            detail = f" · {result.error}" if result.error else ""
+            log.write(
+                f"[yellow]◇ rate limit[/] {result.username}{retry}{detail}"
+            )
         elif result.status is CheckStatus.NETWORK_ERROR:
             detail = f" · {result.error}" if result.error else ""
             log.write(f"[red]× network[/]    {result.username}{detail}")
@@ -422,7 +431,12 @@ class ScanScreen(Screen):
         )
         proxy_text = "ON" if self.app.config.proxies.enabled else "OFF"
         retry_remaining = self.engine.rate_limit_remaining
-        if retry_remaining > 0 and not self.engine.paused and not self.finished:
+        if self.engine.rate_limit_blocked and not self.finished:
+            duration = legacy._format_duration(retry_remaining)
+            self.query_one("#scan-status", Static).update(
+                f"◇ Discord cooldown · retry in {duration}"
+            )
+        elif retry_remaining > 0 and not self.engine.paused and not self.finished:
             self.query_one("#scan-status", Static).update(
                 f"◇ Rate limited · retry in {retry_remaining:.1f}s"
             )
