@@ -173,12 +173,20 @@ class ProxyPool:
         *,
         url: str = "https://discord.com/api/v9/gateway",
         concurrency: int = 8,
-        timeout: float | None = None,
+        request_timeout: float | None = None,
+        **options: float,
     ) -> list[ProxyEndpoint]:
+        legacy_timeout = options.pop("timeout", None)
+        if options:
+            unexpected = ", ".join(sorted(options))
+            raise TypeError(f"unexpected health check options: {unexpected}")
+        if request_timeout is None:
+            request_timeout = legacy_timeout
+
         if not self._opened:
             await self.open()
         semaphore = asyncio.Semaphore(max(1, concurrency))
-        request_timeout = self.timeout if timeout is None else timeout
+        effective_timeout = self.timeout if request_timeout is None else request_timeout
 
         async def check(endpoint: ProxyEndpoint) -> None:
             if endpoint.client is None:
@@ -188,7 +196,7 @@ class ProxyPool:
                 try:
                     response = await endpoint.client.get(
                         url,
-                        timeout=request_timeout,
+                        timeout=effective_timeout,
                     )
                 except httpx.RequestError as exc:
                     await self.report_error(endpoint, exc)
