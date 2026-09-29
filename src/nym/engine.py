@@ -11,6 +11,10 @@ from .scheduler import RateScheduler
 from .storage import Storage
 
 
+class _HaltScan(RuntimeError):
+    """Internal signal used to stop workers without emitting fake results."""
+
+
 class ScanEngine:
     def __init__(
         self,
@@ -21,7 +25,8 @@ class ScanEngine:
         workers: int = 4,
         queue_size: int = 512,
         retry_fallback: float = 1.0,
-        max_rate_limit_retries: int = 3,
+        max_rate_limit_retries: int = 1,
+        long_rate_limit_threshold: float = 60.0,
     ) -> None:
         if workers < 1:
             raise ValueError("workers must be >= 1")
@@ -29,6 +34,8 @@ class ScanEngine:
             raise ValueError("queue_size must be >= workers")
         if max_rate_limit_retries < 0:
             raise ValueError("max_rate_limit_retries must be >= 0")
+        if long_rate_limit_threshold < 0:
+            raise ValueError("long_rate_limit_threshold must be >= 0")
 
         self.checker = checker
         self.storage = storage
@@ -37,14 +44,19 @@ class ScanEngine:
         self.queue_size = queue_size
         self.retry_fallback = retry_fallback
         self.max_rate_limit_retries = max_rate_limit_retries
+        self.long_rate_limit_threshold = long_rate_limit_threshold
         self.stats = ScanStats()
         self.rate_limit_events = 0
         self.rate_limit_until = 0.0
+        self.rate_limit_blocked = False
         self._queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=queue_size)
         self._results: asyncio.Queue[CheckResult] = asyncio.Queue()
         self._stop = asyncio.Event()
         self._pause = asyncio.Event()
         self._pause.set()
+        self._halt_requested = asyncio.Event()
+        self._warmup_complete = asyncio.Event()
+        self._warmup_lock = asyncio.Lock()
 
     @property
     def paused(self) -> bool:
@@ -64,6 +76,7 @@ class ScanEngine:
     def stop(self) -> None:
         self._stop.set()
         self._pause.set()
+        self._halt_requested.set()
 
     async def run(self, usernames: Iterable[str]) -> AsyncIterator[CheckResult]:
         producer = asyncio.create_task(self._produce(usernames), name="nym-producer")
@@ -95,6 +108,7 @@ class ScanEngine:
         finally:
             self._stop.set()
             self._pause.set()
+            self._halt_requested.set()
             producer.cancel()
             for worker in workers:
                 worker.cancel()
@@ -107,14 +121,14 @@ class ScanEngine:
         try:
             for username in usernames:
                 await self._pause.wait()
-                if self._stop.is_set():
+                if self._stop.is_set() or self._halt_requested.is_set():
                     return
                 if await self.storage.contains(username):
                     continue
                 await self._queue.put(username)
                 self.stats.generated += 1
         finally:
-            if not self._stop.is_set():
+            if not self._stop.is_set() and not self._halt_requested.is_set():
                 for _ in range(self.workers):
                     await self._queue.put(None)
 
@@ -127,40 +141,86 @@ class ScanEngine:
                     return
 
                 await self._pause.wait()
-                if self._stop.is_set():
+                if self._stop.is_set() or self._halt_requested.is_set():
                     return
 
-                result = await self._check_with_rate_limit_retry(username)
-                if self._stop.is_set():
+                try:
+                    result = await self._check_with_rate_limit_retry(username)
+                except _HaltScan:
                     return
 
                 await self.storage.save(result)
                 self.stats.record(result)
                 await self._results.put(result)
+
+                if self.rate_limit_blocked:
+                    self.stop()
+                    return
+                if self._stop.is_set():
+                    return
             finally:
                 self._queue.task_done()
+
+    async def _send_check(self, username: str) -> CheckResult:
+        """Send a check while protecting startup from an in-flight 429 burst.
+
+        Until one real Discord response succeeds, only one worker may have a
+        request in flight. This prevents four workers from all hitting a fresh
+        long cooldown before the first 429 response is observed.
+        """
+        if self._halt_requested.is_set():
+            raise _HaltScan
+
+        if not self._warmup_complete.is_set():
+            async with self._warmup_lock:
+                if self._halt_requested.is_set():
+                    raise _HaltScan
+                if not self._warmup_complete.is_set():
+                    await self.scheduler.wait()
+                    result = await self.checker.check(username)
+                    if result.status not in {
+                        CheckStatus.RATE_LIMITED,
+                        CheckStatus.NETWORK_ERROR,
+                    }:
+                        self._warmup_complete.set()
+                    return result
+
+        await self.scheduler.wait()
+        if self._halt_requested.is_set():
+            raise _HaltScan
+        return await self.checker.check(username)
 
     async def _check_with_rate_limit_retry(self, username: str) -> CheckResult:
         attempts = 0
         while True:
             await self._pause.wait()
-            if self._stop.is_set():
-                return CheckResult(
-                    username=username,
-                    status=CheckStatus.UNKNOWN,
-                    error="scan stopped",
-                )
+            if self._stop.is_set() or self._halt_requested.is_set():
+                raise _HaltScan
 
-            await self.scheduler.wait()
-            result = await self.checker.check(username)
+            result = await self._send_check(username)
             if result.status is not CheckStatus.RATE_LIMITED:
                 return result
 
             self.rate_limit_events += 1
-            delay = result.retry_after if result.retry_after is not None else self.retry_fallback
+            delay = (
+                result.retry_after
+                if result.retry_after is not None
+                else self.retry_fallback
+            )
             delay = max(0.0, delay)
-            self.rate_limit_until = max(self.rate_limit_until, time.monotonic() + delay)
+            self.rate_limit_until = max(
+                self.rate_limit_until,
+                time.monotonic() + delay,
+            )
+
+            # Respect the server's Retry-After globally. For a long cooldown,
+            # fail fast instead of leaving the TUI apparently frozen for tens
+            # of minutes. The user can retry once the cooldown has elapsed.
             await self.scheduler.defer(delay)
+            if delay >= self.long_rate_limit_threshold:
+                self.rate_limit_blocked = True
+                self._halt_requested.set()
+                return result
 
             if attempts >= self.max_rate_limit_retries:
                 return result
@@ -168,10 +228,6 @@ class ScanEngine:
             attempts += 1
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                return CheckResult(
-                    username=username,
-                    status=CheckStatus.UNKNOWN,
-                    error="scan stopped",
-                )
+                raise _HaltScan
             except TimeoutError:
                 continue
