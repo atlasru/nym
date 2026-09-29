@@ -90,6 +90,41 @@ async def test_rate_limit_retries_then_succeeds(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_long_rate_limit_halts_without_worker_burst(tmp_path: Path) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, headers={"retry-after": "120"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        checker = UsernameChecker(client, endpoint="https://example.test/check")
+        async with Storage(tmp_path / "nym.db") as storage:
+            engine = ScanEngine(
+                checker,
+                storage,
+                RateScheduler(0),
+                workers=4,
+                queue_size=8,
+                long_rate_limit_threshold=60,
+            )
+            results = [
+                result
+                async for result in engine.run(["one", "two", "three", "four"])
+            ]
+
+    assert calls == 1
+    assert len(results) == 1
+    assert results[0].status is CheckStatus.RATE_LIMITED
+    assert engine.rate_limit_events == 1
+    assert engine.rate_limit_blocked is True
+    assert engine.rate_limit_remaining > 100
+    assert engine.stats.checked == 1
+    assert engine.stats.rate_limited == 1
+
+
+@pytest.mark.asyncio
 async def test_stop_unblocks_full_queue(tmp_path: Path) -> None:
     class SlowChecker:
         async def check(self, username: str) -> CheckResult:
