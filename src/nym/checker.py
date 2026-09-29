@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from .models import CheckResult, CheckStatus
-from .proxy import ProxyPool, ProxyUnavailableError
+from .proxy import ProxyEndpoint, ProxyPool, ProxyUnavailableError
 
 DEFAULT_ENDPOINT = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
 
@@ -80,6 +80,7 @@ class UsernameChecker:
                 status=CheckStatus.RATE_LIMITED,
                 http_status=response.status_code,
                 retry_after=retry_after,
+                error=self._rate_limit_detail(response, proxy),
             )
 
         if response.status_code in {400, 422}:
@@ -142,3 +143,29 @@ class UsernameChecker:
             return max(0.0, float(raw))
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _rate_limit_detail(
+        response: httpx.Response,
+        proxy: ProxyEndpoint | None,
+    ) -> str | None:
+        details: list[str] = []
+        if proxy is not None:
+            details.append(proxy.display)
+
+        scope = response.headers.get("x-ratelimit-scope")
+        if scope:
+            details.append(f"scope={scope}")
+
+        global_header = response.headers.get("x-ratelimit-global")
+        if global_header and global_header.lower() == "true":
+            details.append("global=true")
+        else:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            if payload.get("global") is True:
+                details.append("global=true")
+
+        return " · ".join(details) or None
