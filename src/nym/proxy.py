@@ -173,10 +173,12 @@ class ProxyPool:
         *,
         url: str = "https://discord.com/api/v9/gateway",
         concurrency: int = 8,
+        timeout: float | None = None,
     ) -> list[ProxyEndpoint]:
         if not self._opened:
             await self.open()
         semaphore = asyncio.Semaphore(max(1, concurrency))
+        request_timeout = self.timeout if timeout is None else timeout
 
         async def check(endpoint: ProxyEndpoint) -> None:
             if endpoint.client is None:
@@ -184,7 +186,10 @@ class ProxyPool:
             async with semaphore:
                 started = time.perf_counter()
                 try:
-                    response = await endpoint.client.get(url)
+                    response = await endpoint.client.get(
+                        url,
+                        timeout=request_timeout,
+                    )
                 except httpx.RequestError as exc:
                     await self.report_error(endpoint, exc)
                     return
@@ -192,9 +197,6 @@ class ProxyPool:
                 latency_ms = (time.perf_counter() - started) * 1000
                 endpoint.latency_ms = latency_ms
 
-                # The Discord gateway endpoint should return 200. Previously any
-                # 4xx response was treated as a healthy proxy, which could make
-                # auth failures / blocked exits appear "valid" in the TUI.
                 if response.status_code != 200:
                     await self.report_error(
                         endpoint,
