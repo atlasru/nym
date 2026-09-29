@@ -263,29 +263,58 @@ class ScanScreen(Screen):
                         )
                 else:
                     await proxy_pool.open()
-                    log.write(
-                        f"[dim]Proxy pool: {len(proxy_pool.endpoints)} loaded[/]"
-                    )
+                    total = len(proxy_pool.endpoints)
+                    log.write(f"[dim]Proxy pool: {total} loaded[/]")
+                    concurrency = min(8, total)
+
                     await proxy_pool.health_check_all(
-                        concurrency=min(8, len(proxy_pool.endpoints))
+                        url="https://api.ipify.org?format=json",
+                        concurrency=concurrency,
+                        timeout=20.0,
+                    )
+                    generic_status = {
+                        endpoint.display: (
+                            endpoint.state is ProxyState.READY,
+                            endpoint.last_error,
+                        )
+                        for endpoint in proxy_pool.endpoints
+                    }
+
+                    await proxy_pool.health_check_all(
+                        url="https://discord.com/api/v9/gateway",
+                        concurrency=concurrency,
+                        timeout=20.0,
                     )
                     healthy = [
                         endpoint
                         for endpoint in proxy_pool.endpoints
                         if endpoint.state is ProxyState.READY
                     ]
-                    failed = [
-                        endpoint
-                        for endpoint in proxy_pool.endpoints
-                        if endpoint.state is not ProxyState.READY
-                    ]
                     log.write(
                         "[dim]Proxy preflight: "
-                        f"{len(healthy)} ready · {len(failed)} failed[/]"
+                        f"{len(healthy)} Discord-ready · {total - len(healthy)} failed[/]"
                     )
-                    for endpoint in failed[:10]:
-                        detail = endpoint.last_error or endpoint.state.value
-                        log.write(f"[red]× proxy[/] {endpoint.display} · {detail}")
+
+                    for endpoint in proxy_pool.endpoints[:10]:
+                        generic_ok, generic_error = generic_status[endpoint.display]
+                        discord_ok = endpoint.state is ProxyState.READY
+                        discord_error = endpoint.last_error
+                        if generic_ok and discord_ok:
+                            log.write(
+                                f"[green]✓ proxy OK · Discord OK[/] {endpoint.display}"
+                            )
+                        elif generic_ok:
+                            detail = discord_error or "Discord check failed"
+                            log.write(
+                                "[yellow]◇ proxy OK · Discord FAIL[/] "
+                                f"{endpoint.display} · {detail}"
+                            )
+                        else:
+                            detail = generic_error or "generic check failed"
+                            log.write(
+                                f"[red]× proxy FAIL[/] {endpoint.display} · {detail}"
+                            )
+
                     if not healthy and not proxy_pool.fallback_direct:
                         raise RuntimeError("no proxy passed Discord preflight")
             else:
