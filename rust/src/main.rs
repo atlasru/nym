@@ -35,10 +35,13 @@ fn main() -> Result<()> {
     });
 
     let ui = AppWindow::new().context("failed to create Nym window")?;
-    ui.set_status_text(format!(
-        "Rust rewrite · {} workers · {:.3}s interval",
-        config.scanner.workers, config.scanner.interval
-    ).into());
+    ui.set_status_text(
+        format!(
+            "Rust rewrite · {} workers · {:.3}s interval",
+            config.scanner.workers, config.scanner.interval
+        )
+        .into(),
+    );
     ui.set_proxy_text(
         if config.proxies.enabled {
             "Proxies ON"
