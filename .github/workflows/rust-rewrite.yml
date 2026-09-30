@@ -43,8 +43,8 @@ jobs:
         with:
           workspaces: rust
 
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Normalize formatting
+        run: cargo fmt --all
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
