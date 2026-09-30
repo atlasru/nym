@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -98,14 +98,17 @@ impl AppConfig {
         }
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let config: Self = toml::from_str(&text)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
+        let config: Self =
+            toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
         config.validate()?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<()> {
-        if !matches!(self.scanner.mode.as_str(), "random" | "sequential" | "pattern" | "dictionary") {
+        if !matches!(
+            self.scanner.mode.as_str(),
+            "random" | "sequential" | "pattern" | "dictionary"
+        ) {
             bail!("unsupported scanner mode: {}", self.scanner.mode);
         }
         if !(2..=32).contains(&self.scanner.length) {
