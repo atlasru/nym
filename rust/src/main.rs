@@ -79,10 +79,10 @@ impl App {
 
 fn app_root() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("failed to resolve executable path")?;
-    Ok(exe
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir().context("failed to resolve current directory")?))
+    match exe.parent() {
+        Some(parent) => Ok(parent.to_path_buf()),
+        None => std::env::current_dir().context("failed to resolve current directory"),
+    }
 }
 
 fn main() -> Result<()> {
@@ -107,11 +107,12 @@ fn main() -> Result<()> {
         if event::poll(Duration::from_millis(120)).context("terminal event poll failed")?
             && let Event::Key(key) = event::read().context("terminal event read failed")?
             && key.kind == KeyEventKind::Press
+            && matches!(
+                key.code,
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc
+            )
         {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => app.should_quit = true,
-                _ => {}
-            }
+            app.should_quit = true;
         }
     }
 
@@ -119,7 +120,10 @@ fn main() -> Result<()> {
 }
 
 fn render(frame: &mut Frame<'_>, app: &App) {
-    frame.render_widget(Block::default().style(Style::default().bg(BG)), frame.area());
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG)),
+        frame.area(),
+    );
 
     let area = frame.area();
     let outer = Rect {
@@ -148,10 +152,16 @@ fn render(frame: &mut Frame<'_>, app: &App) {
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let subtitle = app.notice.as_deref().unwrap_or("Rust rewrite · terminal foundation");
+    let subtitle = app
+        .notice
+        .as_deref()
+        .unwrap_or("Rust rewrite · terminal foundation");
     let lines = vec![
         Line::from(vec![
-            Span::styled("NYM", Style::default().fg(AMBER).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "NYM",
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" // SCANNER", Style::default().fg(MUTED)),
         ]),
         Line::from(Span::styled(subtitle, Style::default().fg(MUTED))),
@@ -161,7 +171,11 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_stats(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let proxy_state = if app.config.proxies.enabled { "ON" } else { "OFF" };
+    let proxy_state = if app.config.proxies.enabled {
+        "ON"
+    } else {
+        "OFF"
+    };
     let stats = Line::from(vec![
         metric("CHECKED", "0"),
         separator(),
@@ -304,7 +318,13 @@ fn render_hits(frame: &mut Frame<'_>, area: Rect) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect) {
     let line = Line::from(vec![
-        Span::styled(" Q ", Style::default().fg(BG).bg(AMBER).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Q ",
+            Style::default()
+                .fg(BG)
+                .bg(AMBER)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" quit", Style::default().fg(TEXT)),
         Span::styled("   ESC ", Style::default().fg(MUTED)),
         Span::styled("quit", Style::default().fg(MUTED)),
