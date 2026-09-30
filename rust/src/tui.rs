@@ -54,6 +54,7 @@ pub struct App {
     cooldown_until: Option<Instant>,
     hit_flash_until: Option<Instant>,
     tick: u64,
+    rate_limit_events: u64,
     command_tx: Option<mpsc::UnboundedSender<EngineCommand>>,
     event_tx: mpsc::UnboundedSender<EngineEvent>,
     event_rx: mpsc::UnboundedReceiver<EngineEvent>,
@@ -87,6 +88,7 @@ impl App {
             cooldown_until: None,
             hit_flash_until: None,
             tick: 0,
+            rate_limit_events: 0,
             command_tx: None,
             event_tx,
             event_rx,
@@ -98,8 +100,10 @@ impl App {
     }
 
     pub fn start(&mut self, runtime: &Runtime) {
-        if matches!(self.phase, Phase::Running | Phase::Paused | Phase::Cooldown | Phase::Initializing)
-        {
+        if matches!(
+            self.phase,
+            Phase::Running | Phase::Paused | Phase::Cooldown | Phase::Initializing
+        ) {
             return;
         }
         self.stats = ScanStats::default();
@@ -109,6 +113,7 @@ impl App {
         self.started_at = Some(Instant::now());
         self.cooldown_until = None;
         self.hit_flash_until = None;
+        self.rate_limit_events = 0;
         self.phase = Phase::Initializing;
         self.notice = "initializing scan…".into();
         for worker in &mut self.workers {
@@ -129,7 +134,9 @@ impl App {
     }
 
     pub fn toggle_pause(&mut self) {
-        let Some(tx) = &self.command_tx else { return; };
+        let Some(tx) = &self.command_tx else {
+            return;
+        };
         match self.phase {
             Phase::Running | Phase::Cooldown => {
                 let _ = tx.send(EngineCommand::Pause);
@@ -186,11 +193,22 @@ impl App {
                     self.notice = "scanner running".into();
                 }
                 EngineEvent::Paused(paused) => {
-                    self.phase = if paused { Phase::Paused } else { Phase::Running };
-                    self.notice = if paused { "paused".into() } else { "resumed".into() };
+                    self.phase = if paused {
+                        Phase::Paused
+                    } else {
+                        Phase::Running
+                    };
+                    self.notice = if paused {
+                        "paused".into()
+                    } else {
+                        "resumed".into()
+                    };
                 }
                 EngineEvent::Worker(snapshot) => {
-                    if let Some(worker) = self.workers.iter_mut().find(|worker| worker.id == snapshot.id)
+                    if let Some(worker) = self
+                        .workers
+                        .iter_mut()
+                        .find(|worker| worker.id == snapshot.id)
                     {
                         *worker = snapshot;
                     } else {
@@ -209,28 +227,33 @@ impl App {
                             while self.hits.len() > 12 {
                                 self.hits.pop_back();
                             }
-                            self.hit_flash_until = Some(Instant::now() + Duration::from_millis(1400));
+                            self.hit_flash_until =
+                                Some(Instant::now() + Duration::from_millis(1400));
                             self.push_recent(format!("★ HIT  {}", result.username));
                         }
-                        CheckStatus::Taken => self.push_recent(format!("· taken  {}", result.username)),
+                        CheckStatus::Taken => {
+                            self.push_recent(format!("· taken  {}", result.username));
+                        }
                         CheckStatus::Invalid => {
-                            self.push_recent(format!("! invalid  {}", result.username))
+                            self.push_recent(format!("! invalid  {}", result.username));
                         }
                         CheckStatus::RateLimited => {
-                            self.push_recent(format!("◇ 429  {}", result.username))
+                            self.push_recent(format!("◇ 429  {}", result.username));
                         }
                         CheckStatus::NetworkError => {
-                            self.push_recent(format!("× network  {}", result.username))
+                            self.push_recent(format!("× network  {}", result.username));
                         }
                         CheckStatus::Unknown => {
-                            self.push_recent(format!("? unknown  {}", result.username))
+                            self.push_recent(format!("? unknown  {}", result.username));
                         }
                     }
                 }
                 EngineEvent::Stats(stats) => self.stats = stats,
                 EngineEvent::Cooldown { seconds, detail } => {
+                    self.rate_limit_events += 1;
                     self.phase = Phase::Cooldown;
-                    self.cooldown_until = Some(Instant::now() + Duration::from_secs_f64(seconds));
+                    self.cooldown_until =
+                        Some(Instant::now() + Duration::from_secs_f64(seconds));
                     self.notice = match detail {
                         Some(detail) => format!("Discord cooldown · {seconds:.1}s · {detail}"),
                         None => format!("Discord cooldown · {seconds:.1}s"),
@@ -263,7 +286,8 @@ impl App {
     }
 
     fn runtime(&self) -> Duration {
-        self.started_at.map_or(Duration::ZERO, |started| started.elapsed())
+        self.started_at
+            .map_or(Duration::ZERO, |started| started.elapsed())
     }
 
     fn cooldown_remaining(&self) -> Option<Duration> {
@@ -321,10 +345,15 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Span::styled(" // SCANNER   ", Style::default().fg(MUTED)),
             Span::styled(
                 phase,
-                Style::default().fg(phase_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(phase_color)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(Span::styled(&app.notice, Style::default().fg(MUTED))),
+        Line::from(Span::styled(
+            app.notice.as_str(),
+            Style::default().fg(MUTED),
+        )),
     ];
     frame.render_widget(Paragraph::new(lines).style(Style::default().bg(BG)), area);
 }
@@ -336,7 +365,11 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, app: &App) {
         "OFF".into()
     };
     let runtime = app.runtime();
-    let runtime_text = format!("{:02}:{:02}", runtime.as_secs() / 60, runtime.as_secs() % 60);
+    let runtime_text = format!(
+        "{:02}:{:02}",
+        runtime.as_secs() / 60,
+        runtime.as_secs() % 60
+    );
     let stats = Line::from(vec![
         metric("CHECKED", &app.stats.checked.to_string()),
         separator(),
@@ -346,7 +379,7 @@ fn render_stats(frame: &mut Frame<'_>, area: Rect, app: &App) {
         separator(),
         metric_red("ERRORS", &app.stats.errors().to_string()),
         separator(),
-        metric("429", &app.stats.rate_limited.to_string()),
+        metric("429", &app.rate_limit_events.to_string()),
         separator(),
         metric("RATE", &format!("{:.1}/s", app.rate())),
         separator(),
@@ -392,7 +425,10 @@ fn render_dashboard(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_workers(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let inner_height = area.height.saturating_sub(2) as usize;
-    let worker_rows = app.workers.len().min(inner_height.saturating_div(2).max(1));
+    let worker_rows = app
+        .workers
+        .len()
+        .min(inner_height.saturating_div(2).max(1));
     let mut lines = Vec::new();
     for worker in app.workers.iter().take(worker_rows) {
         let color = worker_color(worker.state);
@@ -404,12 +440,18 @@ fn render_workers(frame: &mut Frame<'_>, area: Rect, app: &App) {
             ),
         ];
         if let Some(username) = &worker.username {
-            spans.push(Span::styled(format!("  {username}"), Style::default().fg(TEXT)));
+            spans.push(Span::styled(
+                format!("  {username}"),
+                Style::default().fg(TEXT),
+            ));
         }
         lines.push(Line::from(spans));
     }
     if !app.recent.is_empty() && lines.len() < inner_height {
-        lines.push(Line::from(Span::styled("─ recent", Style::default().fg(BORDER))));
+        lines.push(Line::from(Span::styled(
+            "─ recent",
+            Style::default().fg(BORDER),
+        )));
         let remaining = inner_height.saturating_sub(lines.len());
         for entry in app.recent.iter().take(remaining) {
             let color = if entry.starts_with('★') {
@@ -421,7 +463,10 @@ fn render_workers(frame: &mut Frame<'_>, area: Rect, app: &App) {
             } else {
                 MUTED
             };
-            lines.push(Line::from(Span::styled(entry, Style::default().fg(color))));
+            lines.push(Line::from(Span::styled(
+                entry.as_str(),
+                Style::default().fg(color),
+            )));
         }
     }
     frame.render_widget(
@@ -444,15 +489,24 @@ fn render_stage(frame: &mut Frame<'_>, area: Rect, app: &App) {
         animation_frame(app)
     };
     lines.push(Line::from(""));
-    for row in art {
-        lines.push(Line::from(Span::styled(row, Style::default().fg(art_color))));
+    for &row in art {
+        lines.push(Line::from(Span::styled(
+            row,
+            Style::default().fg(art_color),
+        )));
     }
     lines.push(Line::from(""));
 
     let status = match app.phase {
         Phase::Cooldown => app
             .cooldown_remaining()
-            .map(|remaining| format!("WAIT {:02}:{:02}", remaining.as_secs() / 60, remaining.as_secs() % 60))
+            .map(|remaining| {
+                format!(
+                    "WAIT {:02}:{:02}",
+                    remaining.as_secs() / 60,
+                    remaining.as_secs() % 60
+                )
+            })
             .unwrap_or_else(|| "WAIT".into()),
         Phase::Running => "SCANNING".into(),
         Phase::Paused => "PAUSED".into(),
@@ -488,13 +542,19 @@ fn render_proxies(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let inner_height = area.height.saturating_sub(2) as usize;
     let mut lines = Vec::new();
     if !app.config.proxies.enabled {
-        lines.push(Line::from(Span::styled("○ DISABLED", Style::default().fg(MUTED))));
         lines.push(Line::from(Span::styled(
-            &app.config.proxies.file,
+            "○ DISABLED",
+            Style::default().fg(MUTED),
+        )));
+        lines.push(Line::from(Span::styled(
+            app.config.proxies.file.as_str(),
             Style::default().fg(TEXT),
         )));
     } else if app.proxies.is_empty() {
-        lines.push(Line::from(Span::styled("… loading pool", Style::default().fg(AMBER))));
+        lines.push(Line::from(Span::styled(
+            "… loading pool",
+            Style::default().fg(AMBER),
+        )));
     } else {
         for proxy in app.proxies.iter().take(inner_height) {
             let color = proxy_color(proxy.state);
@@ -517,7 +577,7 @@ fn render_proxies(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 && lines.len() < inner_height
             {
                 lines.push(Line::from(Span::styled(
-                    format!("    {error}"),
+                    error.as_str(),
                     Style::default().fg(MUTED),
                 )));
             }
@@ -535,7 +595,10 @@ fn render_proxies(frame: &mut Frame<'_>, area: Rect, app: &App) {
 fn render_hits(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let inner_height = area.height.saturating_sub(2) as usize;
     let lines = if app.hits.is_empty() {
-        vec![Line::from(Span::styled("No hits yet", Style::default().fg(MUTED)))]
+        vec![Line::from(Span::styled(
+            "No hits yet",
+            Style::default().fg(MUTED),
+        ))]
     } else {
         app.hits
             .iter()
@@ -543,7 +606,10 @@ fn render_hits(frame: &mut Frame<'_>, area: Rect, app: &App) {
             .map(|hit| {
                 Line::from(vec![
                     Span::styled("★ ", Style::default().fg(GREEN)),
-                    Span::styled(hit, Style::default().fg(TEXT).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        hit.as_str(),
+                        Style::default().fg(TEXT).add_modifier(Modifier::BOLD),
+                    ),
                 ])
             })
             .collect()
@@ -561,7 +627,11 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     if matches!(app.phase, Phase::Idle | Phase::Finished | Phase::Failed) {
         spans.extend(key_hint(" S ", "start"));
     } else {
-        let pause_label = if app.phase == Phase::Paused { "resume" } else { "pause" };
+        let pause_label = if app.phase == Phase::Paused {
+            "resume"
+        } else {
+            "pause"
+        };
         spans.extend(key_hint(" P ", pause_label));
         spans.extend(key_hint(" X ", "stop"));
     }
@@ -570,7 +640,10 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         "   config.toml controls mode / workers / interval / proxies",
         Style::default().fg(MUTED),
     ));
-    frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(BG)), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(BG)),
+        area,
+    );
 }
 
 fn animation_frame(app: &App) -> (&'static [&'static str; 5], Color) {
@@ -579,7 +652,8 @@ fn animation_frame(app: &App) -> (&'static [&'static str; 5], Color) {
     }
     match app.phase {
         Phase::Running | Phase::Initializing => {
-            let scaled = (app.tick as f64 * app.config.interface.animation_speed).round() as usize;
+            let scaled =
+                (app.tick as f64 * app.config.interface.animation_speed).round() as usize;
             (&SCAN_FRAMES[scaled % SCAN_FRAMES.len()], VIOLET)
         }
         Phase::Cooldown => {
@@ -621,14 +695,50 @@ const HIT_FRAME: &[&str; 5] = &[
     "  ✦ HIT ✦  ",
 ];
 const SCAN_FRAMES: [[&str; 5]; 4] = [
-    ["     ·     ", "   ▄███▄   ", "  █ ◉   █  ", "   ▀███▀   ", " ░       ░ "],
-    [" ░       · ", "   ▄███▄   ", "  █  ◉  █  ", "   ▀███▀   ", "     ░     "],
-    [" ·       ░ ", "   ▄███▄   ", "  █   ◉ █  ", "   ▀███▀   ", " ░       · "],
-    ["     ░     ", "   ▄███▄   ", "  █  ◉  █  ", "   ▀███▀   ", " ·       ░ "],
+    [
+        "     ·     ",
+        "   ▄███▄   ",
+        "  █ ◉   █  ",
+        "   ▀███▀   ",
+        " ░       ░ ",
+    ],
+    [
+        " ░       · ",
+        "   ▄███▄   ",
+        "  █  ◉  █  ",
+        "   ▀███▀   ",
+        "     ░     ",
+    ],
+    [
+        " ·       ░ ",
+        "   ▄███▄   ",
+        "  █   ◉ █  ",
+        "   ▀███▀   ",
+        " ░       · ",
+    ],
+    [
+        "     ░     ",
+        "   ▄███▄   ",
+        "  █  ◉  █  ",
+        "   ▀███▀   ",
+        " ·       ░ ",
+    ],
 ];
 const COOLDOWN_FRAMES: [[&str; 5]; 2] = [
-    ["     ◷     ", "   ▄███▄   ", "  █  ·  █  ", "   ▀███▀   ", "   ░   ░   "],
-    ["     ◴     ", "   ▄███▄   ", "  █  ·  █  ", "   ▀███▀   ", "     ░     "],
+    [
+        "     ◷     ",
+        "   ▄███▄   ",
+        "  █  ·  █  ",
+        "   ▀███▀   ",
+        "   ░   ░   ",
+    ],
+    [
+        "     ◴     ",
+        "   ▄███▄   ",
+        "  █  ·  █  ",
+        "   ▀███▀   ",
+        "     ░     ",
+    ],
 ];
 
 fn ready_proxy_count(proxies: &[ProxySnapshot]) -> usize {
