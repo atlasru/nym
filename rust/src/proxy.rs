@@ -1,4 +1,7 @@
-use crate::{config::ProxyConfig, model::{ProxySnapshot, ProxyState}};
+use crate::{
+    config::ProxyConfig,
+    model::{ProxySnapshot, ProxyState},
+};
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use std::{fs, path::Path, time::Duration};
@@ -44,8 +47,8 @@ impl ProxyPool {
                 continue;
             };
             let display = redact_proxy_url(&url);
-            let proxy = reqwest::Proxy::all(&url)
-                .with_context(|| format!("invalid proxy {display}"))?;
+            let proxy =
+                reqwest::Proxy::all(&url).with_context(|| format!("invalid proxy {display}"))?;
             let client = Client::builder()
                 .proxy(proxy)
                 .timeout(timeout)
@@ -60,36 +63,54 @@ impl ProxyPool {
                 last_error: None,
             });
         }
-        Ok(Self { endpoints: Mutex::new(endpoints) })
+        Ok(Self {
+            endpoints: Mutex::new(endpoints),
+        })
     }
 
     pub async fn len(&self) -> usize {
         self.endpoints.lock().await.len()
     }
 
+    pub async fn is_empty(&self) -> bool {
+        self.endpoints.lock().await.is_empty()
+    }
+
     pub async fn preflight(&self) {
         let targets: Vec<(usize, Client)> = {
             let endpoints = self.endpoints.lock().await;
-            endpoints.iter().enumerate().map(|(i, e)| (i, e.client.clone())).collect()
+            endpoints
+                .iter()
+                .enumerate()
+                .map(|(index, endpoint)| (index, endpoint.client.clone()))
+                .collect()
         };
 
         let mut set = JoinSet::new();
         for (index, client) in targets {
             set.spawn(async move {
                 let started = Instant::now();
-                let result = client.get("https://discord.com/api/v9/gateway").send().await;
+                let result = client
+                    .get("https://discord.com/api/v9/gateway")
+                    .send()
+                    .await;
                 (index, started.elapsed(), result)
             });
         }
 
         while let Some(joined) = set.join_next().await {
-            let Ok((index, latency, result)) = joined else { continue; };
+            let Ok((index, latency, result)) = joined else {
+                continue;
+            };
             let mut endpoints = self.endpoints.lock().await;
-            let Some(endpoint) = endpoints.get_mut(index) else { continue; };
+            let Some(endpoint) = endpoints.get_mut(index) else {
+                continue;
+            };
             match result {
                 Ok(response) if response.status().is_success() => {
                     endpoint.state = ProxyState::Ready;
-                    endpoint.latency_ms = Some(latency.as_millis().min(u128::from(u64::MAX)) as u64);
+                    endpoint.latency_ms =
+                        Some(latency.as_millis().min(u128::from(u64::MAX)) as u64);
                     endpoint.last_error = None;
                 }
                 Ok(response) => {
@@ -133,7 +154,8 @@ impl ProxyPool {
         let mut endpoints = self.endpoints.lock().await;
         if let Some(endpoint) = endpoints.get_mut(route.index) {
             endpoint.state = ProxyState::Ready;
-            endpoint.latency_ms = Some(latency.as_millis().min(u128::from(u64::MAX)) as u64);
+            endpoint.latency_ms =
+                Some(latency.as_millis().min(u128::from(u64::MAX)) as u64);
             endpoint.last_error = None;
         }
     }
@@ -174,11 +196,17 @@ fn normalize_proxy_url(raw: &str) -> Result<String> {
         let parts: Vec<&str> = value.splitn(4, ':').collect();
         let mut url = Url::parse(&format!("http://{}:{}", parts[0], parts[1]))
             .context("invalid proxy host or port")?;
-        url.set_username(parts[2]).map_err(|_| anyhow::anyhow!("invalid proxy username"))?;
-        url.set_password(Some(parts[3])).map_err(|_| anyhow::anyhow!("invalid proxy password"))?;
+        url.set_username(parts[2])
+            .map_err(|_| anyhow::anyhow!("invalid proxy username"))?;
+        url.set_password(Some(parts[3]))
+            .map_err(|_| anyhow::anyhow!("invalid proxy password"))?;
         url
     } else {
-        let normalized = if value.contains("://") { value.to_owned() } else { format!("http://{value}") };
+        let normalized = if value.contains("://") {
+            value.to_owned()
+        } else {
+            format!("http://{value}")
+        };
         Url::parse(&normalized).context("invalid proxy URL")?
     };
 
@@ -192,7 +220,9 @@ fn normalize_proxy_url(raw: &str) -> Result<String> {
 }
 
 fn redact_proxy_url(raw: &str) -> String {
-    let Ok(mut url) = Url::parse(raw) else { return "<invalid proxy>".into(); };
+    let Ok(mut url) = Url::parse(raw) else {
+        return "<invalid proxy>".into();
+    };
     if !url.username().is_empty() {
         let _ = url.set_username("***");
         let _ = url.set_password(Some("***"));
