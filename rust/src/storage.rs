@@ -68,17 +68,21 @@ impl Storage {
     }
 
     pub fn save(&mut self, result: &CheckResult) -> Result<()> {
-        let transaction = self.conn.transaction().context("failed to begin result transaction")?;
+        let checked_at = result.checked_at.to_rfc3339();
+        let transaction = self
+            .conn
+            .transaction()
+            .context("failed to begin result transaction")?;
         transaction
             .execute(
                 "INSERT INTO results (username, status, checked_at, http_status, retry_after, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
-                    result.username,
+                    &result.username,
                     result.status.as_str(),
-                    result.checked_at.to_rfc3339(),
+                    &checked_at,
                     result.http_status,
                     result.retry_after,
-                    result.error,
+                    result.error.as_deref(),
                 ],
             )
             .context("failed to insert result")?;
@@ -90,11 +94,7 @@ impl Storage {
             transaction
                 .execute(
                     "INSERT INTO checked_usernames (username, last_status, checked_at) VALUES (?1, ?2, ?3) ON CONFLICT(username) DO UPDATE SET last_status = excluded.last_status, checked_at = excluded.checked_at",
-                    params![
-                        result.username,
-                        result.status.as_str(),
-                        result.checked_at.to_rfc3339(),
-                    ],
+                    params![&result.username, result.status.as_str(), &checked_at],
                 )
                 .context("failed to upsert checked username")?;
         }
