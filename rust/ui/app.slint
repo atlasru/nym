@@ -1,0 +1,104 @@
+import { Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "Nym";
+    width: 1180px;
+    height: 760px;
+    background: #0d0f13;
+
+    in property <string> status-text: "Rust rewrite foundation";
+    in property <string> checked-text: "Checked 0";
+    in property <string> hits-text: "Hits 0";
+    in property <string> proxy-text: "Proxies —";
+
+    VerticalBox {
+        padding: 24px;
+        spacing: 16px;
+
+        Text {
+            text: "✦  NYM";
+            color: #f2b95f;
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        Text {
+            text: root.status-text;
+            color: #8b919e;
+            font-size: 16px;
+        }
+
+        Rectangle {
+            height: 74px;
+            background: #11141a;
+            border-radius: 8px;
+
+            HorizontalBox {
+                padding: 18px;
+                spacing: 36px;
+                Text { text: root.checked-text; color: #e7eaf0; font-size: 18px; }
+                Text { text: root.hits-text; color: #b8f28d; font-size: 18px; }
+                Text { text: root.proxy-text; color: #e7eaf0; font-size: 18px; }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 16px;
+
+            Rectangle {
+                background: #11141a;
+                border-radius: 8px;
+                HorizontalLayout.padding: 16px;
+                HorizontalLayout.stretch: 1;
+                VerticalBox {
+                    spacing: 10px;
+                    Text { text: "WORKERS"; color: #f2b95f; font-size: 14px; font-weight: 700; }
+                    Text { text: "Worker event stream will live here"; color: #8b919e; font-size: 14px; }
+                }
+            }
+
+            Rectangle {
+                background: #11141a;
+                border-radius: 8px;
+                HorizontalLayout.padding: 16px;
+                HorizontalLayout.stretch: 1;
+                VerticalBox {
+                    spacing: 10px;
+                    Text { text: "VISUAL STAGE"; color: #f2b95f; font-size: 14px; font-weight: 700; }
+                    Text { text: "Native asset surface · SVG / images / animation"; color: #8b919e; font-size: 14px; wrap: word-wrap; }
+                }
+            }
+
+            Rectangle {
+                background: #11141a;
+                border-radius: 8px;
+                HorizontalLayout.padding: 16px;
+                HorizontalLayout.stretch: 1;
+                VerticalBox {
+                    spacing: 10px;
+                    Text { text: "PROXY POOL"; color: #f2b95f; font-size: 14px; font-weight: 700; }
+                    Text { text: "Proxy snapshots will live here"; color: #8b919e; font-size: 14px; }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 130px;
+            background: #11141a;
+            border-radius: 8px;
+            VerticalBox {
+                padding: 16px;
+                spacing: 10px;
+                Text { text: "HITS"; color: #f2b95f; font-size: 14px; font-weight: 700; }
+                Text { text: "No hits yet"; color: #8b919e; font-size: 14px; }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 10px;
+            Button { text: "Start"; }
+            Button { text: "Pause"; enabled: false; }
+            Button { text: "Stop"; enabled: false; }
+        }
+    }
+}
