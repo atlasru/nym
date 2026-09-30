@@ -7,7 +7,7 @@ use crate::{
     scheduler::RateScheduler,
     storage::Storage,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -35,7 +35,10 @@ pub enum EngineEvent {
     Proxies(Vec<ProxySnapshot>),
     Result(CheckResult),
     Stats(ScanStats),
-    Cooldown { seconds: f64, detail: Option<String> },
+    Cooldown {
+        seconds: f64,
+        detail: Option<String>,
+    },
     Finished(String),
     Failed(String),
 }
@@ -144,7 +147,9 @@ async fn run_scan_inner(
             None => anyhow::bail!("no proxy passed Discord preflight"),
         }
     } else {
-        let _ = event_tx.send(EngineEvent::Notice("direct connection · proxy routing OFF".into()));
+        let _ = event_tx.send(EngineEvent::Notice(
+            "direct connection · proxy routing OFF".into(),
+        ));
         None
     };
 
@@ -187,7 +192,15 @@ async fn run_scan_inner(
     let workers = config.scanner.workers;
     let limit = config.scanner.limit;
     let producer = tokio::spawn(async move {
-        produce(generator, checked, queue_tx, producer_control, workers, limit).await;
+        produce(
+            generator,
+            checked,
+            queue_tx,
+            producer_control,
+            workers,
+            limit,
+        )
+        .await;
     });
 
     let mut worker_tasks = Vec::with_capacity(workers);
@@ -220,10 +233,7 @@ async fn run_scan_inner(
     let _ = event_tx.send(EngineEvent::Started);
     let _ = event_tx.send(EngineEvent::Notice(format!(
         "{} · length {} · {} workers · {:.3}s interval",
-        config.scanner.mode,
-        config.scanner.length,
-        config.scanner.workers,
-        config.scanner.interval
+        config.scanner.mode, config.scanner.length, config.scanner.workers, config.scanner.interval
     )));
 
     let mut stats = ScanStats::default();
@@ -278,8 +288,13 @@ async fn produce(
         }
         generated += 1;
     }
-    for _ in 0..workers {
-        let _ = queue_tx.send(String::new()).await;
+
+    if !control.stopped.load(Ordering::Relaxed) {
+        for _ in 0..workers {
+            if queue_tx.send(String::new()).await.is_err() {
+                break;
+            }
+        }
     }
 }
 
@@ -304,7 +319,9 @@ async fn worker_loop(
             let mut receiver = queue_rx.lock().await;
             receiver.recv().await
         };
-        let Some(username) = username else { break; };
+        let Some(username) = username else {
+            break;
+        };
         if username.is_empty() {
             break;
         }
@@ -321,14 +338,7 @@ async fn worker_loop(
         let mut rate_retries = 0_u8;
         let result = loop {
             if !control.wait_ready().await {
-                return worker_event(
-                    &event_tx,
-                    worker_id,
-                    WorkerState::Stopped,
-                    None,
-                    None,
-                    None,
-                );
+                return worker_event(&event_tx, worker_id, WorkerState::Stopped, None, None, None);
             }
 
             let result = if !warmup_complete.load(Ordering::Relaxed) {
@@ -389,14 +399,7 @@ async fn worker_loop(
             break;
         }
     }
-    worker_event(
-        &event_tx,
-        worker_id,
-        WorkerState::Stopped,
-        None,
-        None,
-        None,
-    );
+    worker_event(&event_tx, worker_id, WorkerState::Stopped, None, None, None);
 }
 
 fn worker_event(
