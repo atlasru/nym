@@ -94,7 +94,9 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
-            return Ok(Self::default());
+            let config = Self::default();
+            config.save(path)?;
+            return Ok(config);
         }
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
@@ -102,6 +104,17 @@ impl AppConfig {
             toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let text = toml::to_string_pretty(self).context("failed to serialize config")?;
+        fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -126,6 +139,9 @@ impl AppConfig {
         if self.scanner.interval < 0.0 || self.scanner.jitter < 0.0 {
             bail!("interval and jitter must be >= 0");
         }
+        if self.scanner.limit.is_some_and(|limit| limit == 0) {
+            bail!("limit must be >= 1 when set");
+        }
         if self.proxies.cooldown_seconds < 0.0 {
             bail!("proxy cooldown_seconds must be >= 0");
         }
@@ -142,6 +158,7 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn defaults_match_python_reference() {
@@ -162,5 +179,14 @@ mod tests {
         config.scanner.workers = 8;
         config.scanner.queue_size = 4;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn creates_default_config() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = AppConfig::load(&path).unwrap();
+        assert_eq!(config, AppConfig::default());
+        assert!(path.exists());
     }
 }
