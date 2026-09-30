@@ -178,10 +178,12 @@ mod tests {
 
     #[test]
     fn sequential_is_stable() {
-        let mut config = ScannerConfig::default();
-        config.mode = "sequential".into();
-        config.length = 2;
-        config.charset = "ab".into();
+        let config = ScannerConfig {
+            mode: "sequential".into(),
+            length: 2,
+            charset: "ab".into(),
+            ..ScannerConfig::default()
+        };
         let root = tempdir().unwrap();
         let values: Vec<_> = UsernameGenerator::from_config(&config, root.path())
             .unwrap()
@@ -192,9 +194,11 @@ mod tests {
 
     #[test]
     fn pattern_matches_reference_tokens() {
-        let mut config = ScannerConfig::default();
-        config.mode = "pattern".into();
-        config.pattern = "a#".into();
+        let config = ScannerConfig {
+            mode: "pattern".into(),
+            pattern: "a#".into(),
+            ..ScannerConfig::default()
+        };
         let root = tempdir().unwrap();
         let values: Vec<_> = UsernameGenerator::from_config(&config, root.path())
             .unwrap()
