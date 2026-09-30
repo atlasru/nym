@@ -1,10 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-mod config;
-mod model;
-
 use anyhow::{Context, Result};
-use config::AppConfig;
+use nym::config::AppConfig;
 use std::path::PathBuf;
 
 slint::include_modules!();
