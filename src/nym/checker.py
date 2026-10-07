@@ -27,7 +27,7 @@ class UsernameChecker:
         self.proxy_pool = proxy_pool
 
     async def check(self, username: str) -> CheckResult:
-        proxy = None
+        proxy: ProxyEndpoint | None = None
         request_client = self.client
         if self.proxy_pool is not None and self.proxy_pool.endpoints:
             try:
@@ -40,6 +40,7 @@ class UsernameChecker:
                 )
             if proxy is not None:
                 if proxy.client is None:
+                    await self.proxy_pool.release(proxy)
                     return CheckResult(
                         username=username,
                         status=CheckStatus.NETWORK_ERROR,
@@ -47,82 +48,95 @@ class UsernameChecker:
                     )
                 request_client = proxy.client
 
-        started = time.perf_counter()
         try:
-            response = await request_client.post(
-                self.endpoint,
-                json={"username": username},
-                timeout=self.timeout,
+            started = time.perf_counter()
+            try:
+                response = await request_client.post(
+                    self.endpoint,
+                    json={"username": username},
+                    timeout=self.timeout,
+                )
+            except httpx.RequestError as exc:
+                if proxy is not None and self.proxy_pool is not None:
+                    await self.proxy_pool.report_error(proxy, exc)
+                prefix = f"{proxy.display}: " if proxy is not None else ""
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.NETWORK_ERROR,
+                    error=f"{prefix}{type(exc).__name__}: {exc}",
+                    proxied=proxy is not None,
+                )
+
+            latency_ms = (time.perf_counter() - started) * 1000
+            retry_after = (
+                self._retry_after(response) if response.status_code == 429 else None
             )
-        except httpx.RequestError as exc:
             if proxy is not None and self.proxy_pool is not None:
-                await self.proxy_pool.report_error(proxy, exc)
-            prefix = f"{proxy.display}: " if proxy is not None else ""
+                await self.proxy_pool.report_response(
+                    proxy,
+                    response.status_code,
+                    latency_ms=latency_ms,
+                    retry_after=retry_after,
+                )
+
+            if response.status_code == 429:
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.RATE_LIMITED,
+                    http_status=response.status_code,
+                    retry_after=retry_after,
+                    error=self._rate_limit_detail(response, proxy),
+                    proxied=proxy is not None,
+                    rate_limit_global=self._is_global_rate_limit(response),
+                )
+
+            if response.status_code in {400, 422}:
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.INVALID,
+                    http_status=response.status_code,
+                    proxied=proxy is not None,
+                )
+
+            if not 200 <= response.status_code < 300:
+                body = response.text[:256]
+                prefix = f"{proxy.display}: " if proxy is not None else ""
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.UNKNOWN,
+                    http_status=response.status_code,
+                    error=f"{prefix}HTTP {response.status_code}: {body}",
+                    proxied=proxy is not None,
+                )
+
+            try:
+                payload: Mapping[str, Any] = response.json()
+            except ValueError as exc:
+                return CheckResult(
+                    username=username,
+                    status=CheckStatus.UNKNOWN,
+                    http_status=response.status_code,
+                    error=f"invalid JSON: {exc}",
+                    proxied=proxy is not None,
+                )
+
+            taken = payload.get("taken")
+            if taken is True:
+                status = CheckStatus.TAKEN
+            elif taken is False:
+                status = CheckStatus.AVAILABLE
+            else:
+                status = CheckStatus.UNKNOWN
+
             return CheckResult(
                 username=username,
-                status=CheckStatus.NETWORK_ERROR,
-                error=f"{prefix}{type(exc).__name__}: {exc}",
-            )
-
-        latency_ms = (time.perf_counter() - started) * 1000
-        retry_after = self._retry_after(response) if response.status_code == 429 else None
-        if proxy is not None and self.proxy_pool is not None:
-            await self.proxy_pool.report_response(
-                proxy,
-                response.status_code,
-                latency_ms=latency_ms,
-                retry_after=retry_after,
-            )
-
-        if response.status_code == 429:
-            return CheckResult(
-                username=username,
-                status=CheckStatus.RATE_LIMITED,
+                status=status,
                 http_status=response.status_code,
-                retry_after=retry_after,
-                error=self._rate_limit_detail(response, proxy),
+                proxied=proxy is not None,
             )
-
-        if response.status_code in {400, 422}:
-            return CheckResult(
-                username=username,
-                status=CheckStatus.INVALID,
-                http_status=response.status_code,
-            )
-
-        if not 200 <= response.status_code < 300:
-            body = response.text[:256]
-            prefix = f"{proxy.display}: " if proxy is not None else ""
-            return CheckResult(
-                username=username,
-                status=CheckStatus.UNKNOWN,
-                http_status=response.status_code,
-                error=f"{prefix}HTTP {response.status_code}: {body}",
-            )
-
-        try:
-            payload: Mapping[str, Any] = response.json()
-        except ValueError as exc:
-            return CheckResult(
-                username=username,
-                status=CheckStatus.UNKNOWN,
-                http_status=response.status_code,
-                error=f"invalid JSON: {exc}",
-            )
-
-        taken = payload.get("taken")
-        if taken is True:
-            status = CheckStatus.TAKEN
-        elif taken is False:
-            status = CheckStatus.AVAILABLE
-        else:
-            status = CheckStatus.UNKNOWN
-
-        return CheckResult(
-            username=username,
-            status=status,
-            http_status=response.status_code,
-        )
+        finally:
+            if proxy is not None and self.proxy_pool is not None:
+                await self.proxy_pool.release(proxy)
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:
@@ -145,7 +159,20 @@ class UsernameChecker:
             return None
 
     @staticmethod
+    def _is_global_rate_limit(response: httpx.Response) -> bool:
+        global_header = response.headers.get("x-ratelimit-global")
+        if global_header and global_header.lower() == "true":
+            return True
+
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        return payload.get("global") is True
+
+    @classmethod
     def _rate_limit_detail(
+        cls,
         response: httpx.Response,
         proxy: ProxyEndpoint | None,
     ) -> str | None:
@@ -157,15 +184,7 @@ class UsernameChecker:
         if scope:
             details.append(f"scope={scope}")
 
-        global_header = response.headers.get("x-ratelimit-global")
-        if global_header and global_header.lower() == "true":
+        if cls._is_global_rate_limit(response):
             details.append("global=true")
-        else:
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = {}
-            if payload.get("global") is True:
-                details.append("global=true")
 
         return " · ".join(details) or None
