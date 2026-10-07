@@ -208,14 +208,37 @@ class ScanEngine:
                 else self.retry_fallback
             )
             delay = max(0.0, delay)
+
+            # A proxy-scoped 429 only cools down the proxy that received it.
+            # Rotate to another leased endpoint instead of stalling every
+            # worker through the global scheduler.
+            proxy_pool = self.checker.proxy_pool
+            if (
+                result.proxied
+                and not result.rate_limit_global
+                and proxy_pool is not None
+            ):
+                pool_delay = await proxy_pool.next_available_delay()
+                if (
+                    pool_delay is not None
+                    and pool_delay >= self.long_rate_limit_threshold
+                ):
+                    self.rate_limit_until = max(
+                        self.rate_limit_until,
+                        time.monotonic() + pool_delay,
+                    )
+                    self.rate_limit_blocked = True
+                    self._halt_requested.set()
+                    return result
+                continue
+
             self.rate_limit_until = max(
                 self.rate_limit_until,
                 time.monotonic() + delay,
             )
 
-            # Respect the server's Retry-After globally. For a long cooldown,
-            # fail fast instead of leaving the TUI apparently frozen for tens
-            # of minutes. The user can retry once the cooldown has elapsed.
+            # Direct or explicitly global Discord limits still gate the whole
+            # scanner. A long cooldown fails fast instead of looking frozen.
             await self.scheduler.defer(delay)
             if delay >= self.long_rate_limit_threshold:
                 self.rate_limit_blocked = True

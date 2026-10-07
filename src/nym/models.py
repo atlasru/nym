@@ -22,6 +22,8 @@ class CheckResult:
     http_status: int | None = None
     retry_after: float | None = None
     error: str | None = None
+    proxied: bool = False
+    rate_limit_global: bool = False
 
 
 @dataclass(slots=True)

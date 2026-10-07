@@ -8,6 +8,7 @@ import pytest
 from nym.checker import UsernameChecker
 from nym.engine import ScanEngine
 from nym.models import CheckResult, CheckStatus
+from nym.proxy import ProxyEndpoint, ProxyPool
 from nym.scheduler import RateScheduler
 from nym.storage import Storage
 
@@ -149,3 +150,109 @@ async def test_stop_unblocks_full_queue(tmp_path: Path) -> None:
         await asyncio.sleep(0.05)
         engine.stop()
         await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_proxy_rate_limit_rotates_without_global_halt(tmp_path: Path) -> None:
+    first_calls = 0
+    second_calls = 0
+
+    async def first_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal first_calls
+        first_calls += 1
+        return httpx.Response(429, headers={"retry-after": "120"}, json={})
+
+    async def second_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal second_calls
+        second_calls += 1
+        return httpx.Response(200, json={"taken": False})
+
+    first = ProxyEndpoint("http://127.0.0.1:8001", "proxy-1")
+    second = ProxyEndpoint("http://127.0.0.1:8002", "proxy-2")
+    first.client = httpx.AsyncClient(transport=httpx.MockTransport(first_handler))
+    second.client = httpx.AsyncClient(transport=httpx.MockTransport(second_handler))
+    pool = ProxyPool([first, second])
+
+    try:
+        async with httpx.AsyncClient() as client:
+            checker = UsernameChecker(
+                client,
+                endpoint="https://example.test/check",
+                proxy_pool=pool,
+            )
+            async with Storage(tmp_path / "nym.db") as storage:
+                engine = ScanEngine(
+                    checker,
+                    storage,
+                    RateScheduler(0),
+                    workers=1,
+                    queue_size=2,
+                    long_rate_limit_threshold=60,
+                )
+                results = [result async for result in engine.run(["free"])]
+    finally:
+        await pool.close()
+
+    assert first_calls == 1
+    assert second_calls == 1
+    assert results[0].status is CheckStatus.AVAILABLE
+    assert engine.rate_limit_events == 1
+    assert engine.rate_limit_blocked is False
+    assert first.rate_limits == 1
+    assert first.use_count == 1
+    assert second.use_count == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_global_429_still_halts_proxy_scan(tmp_path: Path) -> None:
+    first_calls = 0
+    second_calls = 0
+
+    async def first_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal first_calls
+        first_calls += 1
+        return httpx.Response(
+            429,
+            headers={
+                "retry-after": "120",
+                "x-ratelimit-global": "true",
+            },
+            json={"global": True},
+        )
+
+    async def second_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal second_calls
+        second_calls += 1
+        return httpx.Response(200, json={"taken": False})
+
+    first = ProxyEndpoint("http://127.0.0.1:8001", "proxy-1")
+    second = ProxyEndpoint("http://127.0.0.1:8002", "proxy-2")
+    first.client = httpx.AsyncClient(transport=httpx.MockTransport(first_handler))
+    second.client = httpx.AsyncClient(transport=httpx.MockTransport(second_handler))
+    pool = ProxyPool([first, second])
+
+    try:
+        async with httpx.AsyncClient() as client:
+            checker = UsernameChecker(
+                client,
+                endpoint="https://example.test/check",
+                proxy_pool=pool,
+            )
+            async with Storage(tmp_path / "nym.db") as storage:
+                engine = ScanEngine(
+                    checker,
+                    storage,
+                    RateScheduler(0),
+                    workers=1,
+                    queue_size=2,
+                    long_rate_limit_threshold=60,
+                )
+                results = [result async for result in engine.run(["name"])]
+    finally:
+        await pool.close()
+
+    assert first_calls == 1
+    assert second_calls == 0
+    assert results[0].status is CheckStatus.RATE_LIMITED
+    assert results[0].rate_limit_global is True
+    assert engine.rate_limit_blocked is True
