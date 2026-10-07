@@ -33,6 +33,7 @@ class ProxyEndpoint:
     consecutive_failures: int = 0
     cooldown_until: float = 0.0
     use_count: int = 0
+    in_flight: int = 0
     last_error: str | None = None
     client: httpx.AsyncClient | None = field(default=None, repr=False)
 
@@ -63,6 +64,7 @@ class ProxyPool:
         self.dead_after_failures = dead_after_failures
         self.fallback_direct = fallback_direct
         self._lock = asyncio.Lock()
+        self._available = asyncio.Condition(self._lock)
         self._opened = False
 
     @classmethod
@@ -106,36 +108,106 @@ class ProxyPool:
         await asyncio.gather(*(client.aclose() for client in clients), return_exceptions=True)
         for endpoint in self.endpoints:
             endpoint.client = None
+            endpoint.in_flight = 0
         self._opened = False
+        async with self._available:
+            self._available.notify_all()
 
     async def acquire(self) -> ProxyEndpoint | None:
-        async with self._lock:
-            now = time.monotonic()
-            candidates: list[ProxyEndpoint] = []
-            for endpoint in self.endpoints:
-                if endpoint.state is ProxyState.DEAD:
-                    continue
-                if endpoint.cooldown_until > now:
-                    continue
-                if endpoint.state is ProxyState.COOLDOWN:
-                    endpoint.state = ProxyState.DEGRADED
-                candidates.append(endpoint)
+        while True:
+            timeout: float | None = None
+            async with self._available:
+                now = time.monotonic()
+                candidates: list[ProxyEndpoint] = []
+                for endpoint in self.endpoints:
+                    if endpoint.state is ProxyState.DEAD:
+                        continue
+                    if endpoint.in_flight:
+                        continue
+                    if endpoint.cooldown_until > now:
+                        continue
+                    if endpoint.state is ProxyState.COOLDOWN:
+                        endpoint.state = ProxyState.DEGRADED
+                    candidates.append(endpoint)
 
-            if not candidates:
+                if candidates:
+                    endpoint = min(
+                        candidates,
+                        key=lambda item: (
+                            item.consecutive_failures,
+                            item.use_count,
+                            item.latency_ms
+                            if item.latency_ms is not None
+                            else float("inf"),
+                        ),
+                    )
+                    endpoint.use_count += 1
+                    endpoint.in_flight += 1
+                    return endpoint
+
+                live = [
+                    endpoint
+                    for endpoint in self.endpoints
+                    if endpoint.state is not ProxyState.DEAD
+                ]
+                if not live:
+                    if self.fallback_direct:
+                        return None
+                    raise ProxyUnavailableError("no healthy proxy is currently available")
+
                 if self.fallback_direct:
                     return None
-                raise ProxyUnavailableError("no healthy proxy is currently available")
 
-            endpoint = min(
-                candidates,
-                key=lambda item: (
-                    item.consecutive_failures,
-                    item.use_count,
-                    item.latency_ms if item.latency_ms is not None else float("inf"),
-                ),
-            )
-            endpoint.use_count += 1
-            return endpoint
+                cooling = [
+                    max(0.0, endpoint.cooldown_until - now)
+                    for endpoint in live
+                    if not endpoint.in_flight and endpoint.cooldown_until > now
+                ]
+                if cooling:
+                    timeout = min(cooling)
+
+                try:
+                    if timeout is None:
+                        await self._available.wait()
+                    else:
+                        await asyncio.wait_for(self._available.wait(), timeout=timeout)
+                except TimeoutError:
+                    pass
+
+    async def release(self, endpoint: ProxyEndpoint) -> None:
+        async with self._available:
+            endpoint.in_flight = max(0, endpoint.in_flight - 1)
+            self._available.notify_all()
+
+    async def next_available_delay(self) -> float | None:
+        async with self._lock:
+            now = time.monotonic()
+            live = [
+                endpoint
+                for endpoint in self.endpoints
+                if endpoint.state is not ProxyState.DEAD
+            ]
+            if not live:
+                return 0.0 if self.fallback_direct else None
+
+            if self.fallback_direct:
+                return 0.0
+
+            for endpoint in live:
+                if not endpoint.in_flight and endpoint.cooldown_until <= now:
+                    return 0.0
+
+            # An in-flight proxy may become usable as soon as its request
+            # completes, so do not treat the whole pool as cooling down yet.
+            if any(endpoint.in_flight for endpoint in live):
+                return 0.0
+
+            delays = [
+                max(0.0, endpoint.cooldown_until - now)
+                for endpoint in live
+                if endpoint.cooldown_until > now
+            ]
+            return min(delays) if delays else 0.0
 
     async def report_response(
         self,
@@ -145,7 +217,7 @@ class ProxyPool:
         latency_ms: float,
         retry_after: float | None = None,
     ) -> None:
-        async with self._lock:
+        async with self._available:
             endpoint.latency_ms = latency_ms
             endpoint.last_error = None
             if status_code == 429:
@@ -153,20 +225,24 @@ class ProxyPool:
                 endpoint.state = ProxyState.COOLDOWN
                 cooldown = retry_after if retry_after is not None else self.cooldown_seconds
                 endpoint.cooldown_until = time.monotonic() + max(0.0, cooldown)
+                self._available.notify_all()
                 return
 
             if status_code >= 500:
                 self._mark_failure(endpoint, f"HTTP {status_code}")
+                self._available.notify_all()
                 return
 
             endpoint.successes += 1
             endpoint.consecutive_failures = 0
             endpoint.cooldown_until = 0.0
             endpoint.state = ProxyState.READY
+            self._available.notify_all()
 
     async def report_error(self, endpoint: ProxyEndpoint, error: BaseException) -> None:
-        async with self._lock:
+        async with self._available:
             self._mark_failure(endpoint, f"{type(error).__name__}: {error}")
+            self._available.notify_all()
 
     async def health_check_all(
         self,
