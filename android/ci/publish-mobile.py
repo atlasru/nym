@@ -98,6 +98,18 @@ if existing.returncode:
          "--title", "Nym Mobile 0.1.0 (Android debug)", "--notes-file", str(notes)],
         check=True,
     )
+else:
+    subprocess.run(
+        ["gh", "api", "--method", "PATCH",
+         f"repos/{os.environ['GH_REPO']}/git/refs/tags/{tag}",
+         "-f", f"sha={source}", "-F", "force=true"],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "release", "edit", tag, "--notes-file", str(notes),
+         "--prerelease", "--latest=false"],
+        check=True,
+    )
 subprocess.run(
     ["gh", "release", "upload", tag, str(apk), str(apk_dir / "SHA256SUMS.txt"),
      str(apk_dir / "SIGNATURE.txt"), str(validation), str(bundle),

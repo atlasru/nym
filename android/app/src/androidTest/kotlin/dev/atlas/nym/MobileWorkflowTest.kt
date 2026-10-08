@@ -21,6 +21,7 @@ import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
 import java.io.File
+import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(AndroidJUnit4::class)
@@ -34,7 +35,7 @@ class MobileWorkflowTest {
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                val available = request.body.readUtf8().contains("a")
+                val available = JSONObject(request.body.readUtf8()).getString("username").contains("a")
                 return MockResponse().setBody("{\"taken\":${!available}}")
             }
         }
@@ -60,6 +61,7 @@ class MobileWorkflowTest {
     }
     private fun screenshot(name: String) {
         rule.waitForIdle()
+        Thread.sleep(300) // Let SurfaceFlinger present the Compose frame before capture.
         val directory = File(rule.activity.getExternalFilesDir(null), "screenshots").apply { mkdirs() }
         assertTrue(device.takeScreenshot(File(directory, "$name.png")))
     }
@@ -111,6 +113,7 @@ class MobileWorkflowTest {
         screenshot("02-home-paused")
         rule.activityRule.scenario.recreate()
         rule.onNodeWithTag("nav_Results").performClick()
+        rule.waitUntil(10_000) { !model.results.value.loading && model.results.value.items.isNotEmpty() }
         rule.onNodeWithTag("result_list").assertIsDisplayed()
         screenshot("03-results")
         rule.onNodeWithTag("result_search").performTextInput("aaa")

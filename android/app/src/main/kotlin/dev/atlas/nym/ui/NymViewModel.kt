@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class ResultQuery(val search: String = "", val status: CheckStatus? = CheckStatus.AVAILABLE, val ascending: Boolean = false, val limit: Int = 200, val sessionId: String? = null)
+data class ResultPage(val items: List<StoredResult> = emptyList(), val loading: Boolean = false)
 class NymViewModel(application: Application, private val saved: SavedStateHandle) : AndroidViewModel(application) {
     val graph = (application as NymApplication).graph
     val preferences = MutableStateFlow(Preferences())
@@ -48,9 +49,10 @@ class NymViewModel(application: Application, private val saved: SavedStateHandle
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val current = combine(sessions, selectedId) { items, id -> (items.find { it.id == id } ?: items.firstOrNull())?.let { graph.store.session(it.id) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
-    val results: StateFlow<List<StoredResult>> = combine(query, graph.store.changes) { query, _ -> query }.mapLatest {
-        graph.ready.await(); graph.store.results(it.search, it.status, it.ascending, it.limit, it.sessionId)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val results: StateFlow<ResultPage> = combine(query, graph.store.changes) { query, _ -> query }.mapLatest {
+        graph.ready.await(); ResultPage(graph.store.results(it.search, it.status, it.ascending, it.limit, it.sessionId))
+    }.catch { message.value = "Cannot load results: ${it.message}"; emit(ResultPage()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ResultPage(loading = true))
     val cooldown = MutableStateFlow(0L)
     val clock = flow {
         while (true) { emit(System.currentTimeMillis()); delay(1000) }

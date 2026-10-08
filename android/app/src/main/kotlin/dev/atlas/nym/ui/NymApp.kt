@@ -59,11 +59,15 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val Dark = darkColorScheme(
-    primary = Color(0xFFB5C6EE), onPrimary = Color(0xFF17253F), primaryContainer = Color(0xFF25314A),
+    primary = Color(0xFFB5C6EE), onPrimary = Color(0xFF17253F), primaryContainer = Color(0xFF25314A), onPrimaryContainer = Color(0xFFDCE6FF),
+    secondary = Color(0xFFB5C6EE), onSecondary = Color(0xFF17253F), secondaryContainer = Color(0xFF25314A), onSecondaryContainer = Color(0xFFDCE6FF),
+    tertiary = Color(0xFFB5C6EE), onTertiary = Color(0xFF17253F), tertiaryContainer = Color(0xFF25314A), onTertiaryContainer = Color(0xFFDCE6FF),
     background = Color(0xFF090B10), surface = Color(0xFF101319), surfaceContainer = Color(0xFF151922),
     surfaceVariant = Color(0xFF1B2029), onBackground = Color(0xFFEBEEF5), onSurface = Color(0xFFEBEEF5),
     onSurfaceVariant = Color(0xFF9099AA), outline = Color(0xFF333C4D), outlineVariant = Color(0xFF232A36))
-private val Light = lightColorScheme(primary = Color(0xFF405D93), background = Color(0xFFF5F6FA), surface = Color.White, surfaceContainer = Color(0xFFEBEEF5))
+private val Light = lightColorScheme(primary = Color(0xFF405D93), primaryContainer = Color(0xFFD7E3FA), onPrimaryContainer = Color(0xFF17253F),
+    secondary = Color(0xFF405D93), secondaryContainer = Color(0xFFD7E3FA), onSecondaryContainer = Color(0xFF17253F),
+    tertiary = Color(0xFF405D93), tertiaryContainer = Color(0xFFD7E3FA), onTertiaryContainer = Color(0xFF17253F), background = Color(0xFFF5F6FA), surface = Color.White, surfaceContainer = Color(0xFFEBEEF5))
 private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons.AlternateEmail,
     "Sessions" to NymIcons.History, "Settings" to NymIcons.Tune)
 
@@ -239,7 +243,8 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
 }
 
 @Composable private fun Results(vm: NymViewModel, onExport: () -> Unit) {
-    val results by vm.results.collectAsStateWithLifecycle()
+    val page by vm.results.collectAsStateWithLifecycle()
+    val results = page.items
     val query by vm.query.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     var details by remember { mutableStateOf<StoredResult?>(null) }
@@ -255,11 +260,12 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
             }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("${results.size} shown", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text(if (page.loading) "Loading…" else "${results.size} shown", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
             if (query.sessionId != null) TextButton(onClick = { vm.query.value = query.copy(sessionId = null) }) { Text("All sessions") }
             TextButton(onClick = { vm.query.value = query.copy(ascending = !query.ascending) }) { Icon(NymIcons.Sort, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text(if (query.ascending) "A–Z" else "Newest") }
         }
-        if (results.isEmpty()) Empty(NymIcons.AlternateEmail, "No matching results", "Completed checks appear here. Availability is a snapshot, not a reservation.", Modifier.weight(1f))
+        if (page.loading) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.testTag("results_loading")) }
+        else if (results.isEmpty()) Empty(NymIcons.AlternateEmail, "No matching results", "Completed checks appear here. Availability is a snapshot, not a reservation.", Modifier.weight(1f))
         else LazyColumn(Modifier.weight(1f).testTag("result_list"), contentPadding = PaddingValues(bottom = 12.dp)) {
             items(results, key = { it.id }) { item ->
                 Row(Modifier.fillMaxWidth().combinedClickable(onClick = { details = item }, onLongClick = {
