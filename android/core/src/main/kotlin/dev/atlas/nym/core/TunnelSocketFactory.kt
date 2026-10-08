@@ -8,6 +8,9 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketAddress
+import java.net.ServerSocket
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import javax.net.SocketFactory
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -23,15 +26,20 @@ class TunnelSocketFactory(private val proxy: ProxySpec, private val tlsFactory: 
 }
 
 private class TunnelSocket(private val proxy: ProxySpec, private val tlsFactory: SSLSocketFactory) : Socket() {
-    @Volatile private var delegate: Socket = Socket()
+    private val proxyConnection = Socket()
+    @Volatile private var delegate: Socket = proxyConnection
+    @Volatile private var endpointMode = proxy.scheme == "socks5"
+    @Volatile private var relayPeer: Socket? = null
+    private var relayExecutor: ExecutorService? = null
     @Volatile private var closed = false
     private var readTimeout = 0
     override fun connect(endpoint: SocketAddress) = connect(endpoint, 15_000)
     override fun connect(endpoint: SocketAddress, timeout: Int) {
         val target = endpoint as? InetSocketAddress ?: throw IOException("Unsupported target address")
         try {
-            delegate.connect(InetSocketAddress(proxy.host, proxy.port), timeout)
-            delegate.soTimeout = if (readTimeout > 0) readTimeout else timeout.coerceAtLeast(1000)
+            val peer = InetSocketAddress(proxy.host, proxy.port)
+            if (endpointMode) super.connect(peer, timeout) else delegate.connect(peer, timeout)
+            soTimeout = if (readTimeout > 0) readTimeout else timeout.coerceAtLeast(1000)
             if (proxy.scheme == "https") {
                 val secure = tlsFactory.createSocket(delegate, proxy.host, proxy.port, true) as SSLSocket
                 delegate = secure
@@ -39,6 +47,9 @@ private class TunnelSocket(private val proxy: ProxySpec, private val tlsFactory:
                 secure.sslParameters = secure.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
                 secure.startHandshake()
                 httpConnect(target.hostString, target.port)
+                // Android 10 Conscrypt may require a real descriptor for layered TLS.
+                // A loopback relay carries only the target's encrypted TLS bytes.
+                if (System.getProperty("java.vm.name") == "Dalvik") bridgeTlsTunnel(timeout)
             } else socksConnect(target.hostString, target.port)
             if (closed) throw IOException("Canceled")
         } catch (failure: Exception) {
@@ -87,28 +98,61 @@ private class TunnelSocket(private val proxy: ProxySpec, private val tlsFactory:
         val length = when (reply[3].toInt() and 255) { 1 -> 4; 4 -> 16; 3 -> input.readExactly(1)[0].toInt() and 255; else -> throw IOException("Invalid SOCKS5 reply") }
         input.readExactly(length + 2)
     }
-    override fun getInputStream(): InputStream = delegate.getInputStream()
-    override fun getOutputStream(): OutputStream = delegate.getOutputStream()
-    override fun close() { closed = true; delegate.close() }
-    override fun isClosed() = closed || delegate.isClosed
-    override fun isConnected() = delegate.isConnected
-    override fun isInputShutdown() = delegate.isInputShutdown
-    override fun isOutputShutdown() = delegate.isOutputShutdown
-    override fun shutdownInput() = delegate.shutdownInput()
-    override fun shutdownOutput() = delegate.shutdownOutput()
-    override fun setSoTimeout(timeout: Int) { readTimeout = timeout; delegate.soTimeout = timeout }
-    override fun getSoTimeout() = delegate.soTimeout
-    override fun setTcpNoDelay(on: Boolean) { delegate.tcpNoDelay = on }
-    override fun getTcpNoDelay() = delegate.tcpNoDelay
-    override fun setKeepAlive(on: Boolean) { delegate.keepAlive = on }
-    override fun getKeepAlive() = delegate.keepAlive
-    override fun getInetAddress(): InetAddress? = delegate.inetAddress
-    override fun getLocalAddress(): InetAddress = delegate.localAddress
-    override fun getPort() = delegate.port
-    override fun getLocalPort() = delegate.localPort
-    override fun getRemoteSocketAddress(): SocketAddress? = delegate.remoteSocketAddress
-    override fun getLocalSocketAddress(): SocketAddress? = delegate.localSocketAddress
-    override fun bind(bindpoint: SocketAddress?) = delegate.bind(bindpoint)
+    private fun bridgeTlsTunnel(timeout: Int) {
+        val network = delegate
+        val listener = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        try {
+            endpointMode = true
+            super.connect(InetSocketAddress("127.0.0.1", listener.localPort), timeout)
+            super.setSoTimeout(readTimeout)
+            val peer = listener.accept()
+            relayPeer = peer
+            relayExecutor = Executors.newFixedThreadPool(2) { runnable ->
+                Thread(runnable, "nym-proxy-tls-relay").apply { isDaemon = true }
+            }.also { executor ->
+                executor.execute {
+                    try { peer.getInputStream().copyTo(network.getOutputStream()); network.getOutputStream().flush() }
+                    catch (_: IOException) { }
+                    finally { close() }
+                }
+                executor.execute {
+                    try { network.getInputStream().copyTo(peer.getOutputStream()); peer.getOutputStream().flush() }
+                    catch (_: IOException) { }
+                    finally { close() }
+                }
+            }
+        } finally { listener.close() }
+    }
+    override fun getInputStream(): InputStream = if (endpointMode) super.getInputStream() else delegate.getInputStream()
+    override fun getOutputStream(): OutputStream = if (endpointMode) super.getOutputStream() else delegate.getOutputStream()
+    override fun close() {
+        if (closed) return
+        closed = true
+        runCatching { proxyConnection.close() }
+        runCatching { delegate.close() }
+        runCatching { relayPeer?.close() }
+        runCatching { super.close() }
+        relayExecutor?.shutdownNow()
+    }
+    override fun isClosed() = closed || if (endpointMode) super.isClosed() else delegate.isClosed
+    override fun isConnected() = if (endpointMode) super.isConnected() else delegate.isConnected
+    override fun isInputShutdown() = if (endpointMode) super.isInputShutdown() else delegate.isInputShutdown
+    override fun isOutputShutdown() = if (endpointMode) super.isOutputShutdown() else delegate.isOutputShutdown
+    override fun shutdownInput() { if (endpointMode) super.shutdownInput() else delegate.shutdownInput() }
+    override fun shutdownOutput() { if (endpointMode) super.shutdownOutput() else delegate.shutdownOutput() }
+    override fun setSoTimeout(timeout: Int) { readTimeout = timeout; if (endpointMode) super.setSoTimeout(timeout) else delegate.soTimeout = timeout }
+    override fun getSoTimeout() = if (endpointMode) super.getSoTimeout() else delegate.soTimeout
+    override fun setTcpNoDelay(on: Boolean) { if (endpointMode) super.setTcpNoDelay(on) else delegate.tcpNoDelay = on }
+    override fun getTcpNoDelay() = if (endpointMode) super.getTcpNoDelay() else delegate.tcpNoDelay
+    override fun setKeepAlive(on: Boolean) { if (endpointMode) super.setKeepAlive(on) else delegate.keepAlive = on }
+    override fun getKeepAlive() = if (endpointMode) super.getKeepAlive() else delegate.keepAlive
+    override fun getInetAddress(): InetAddress? = if (endpointMode) super.getInetAddress() else delegate.inetAddress
+    override fun getLocalAddress(): InetAddress = if (endpointMode) super.getLocalAddress() else delegate.localAddress
+    override fun getPort() = if (endpointMode) super.getPort() else delegate.port
+    override fun getLocalPort() = if (endpointMode) super.getLocalPort() else delegate.localPort
+    override fun getRemoteSocketAddress(): SocketAddress? = if (endpointMode) super.getRemoteSocketAddress() else delegate.remoteSocketAddress
+    override fun getLocalSocketAddress(): SocketAddress? = if (endpointMode) super.getLocalSocketAddress() else delegate.localSocketAddress
+    override fun bind(bindpoint: SocketAddress?) { if (endpointMode) super.bind(bindpoint) else delegate.bind(bindpoint) }
 }
 
 private fun InputStream.readExactly(count: Int): ByteArray {

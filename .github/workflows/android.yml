@@ -101,3 +101,36 @@ jobs:
             android/device-artifacts/
             android/app/build/reports/androidTests/
             android/app/build/outputs/androidTest-results/
+
+  publish:
+    name: Publish verified debug APK and device evidence
+    needs: [build, device]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Nym_Mobile_0.1.0_arm64-debug
+          path: download/apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-api-29-screenshots-and-tests
+          path: download/api29
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-api-36-screenshots-and-tests
+          path: download/api36
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-unit-tests-and-lint
+          path: download/unit
+      - name: Publish debug prerelease with checksums and real screenshots
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 android/ci/publish-mobile.py

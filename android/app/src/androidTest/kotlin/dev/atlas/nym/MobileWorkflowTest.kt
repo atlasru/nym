@@ -99,7 +99,6 @@ class MobileWorkflowTest {
         manager.activeNotifications.first { it.id == ScanService.NOTIFICATION }.notification.actions.first { it.title.toString() == "Stop" }.actionIntent.send()
         rule.waitUntil(10_000) { graph.serviceSession.value == null }
         rule.waitUntil(10_000) { runBlocking { graph.store.session(session.id)!!.status == SessionStatus.STOPPED } }
-        rule.activityRule.scenario.recreate()
     }
     @Test fun pauseResumePersistResultsAndCaptureRealScreens() {
         start()

@@ -7,8 +7,9 @@ No Python runtime or WebView. Existing Windows/Python sources are unchanged.
 
 ## Install
 
-Download `Nym_Mobile_0.1.0_arm64-debug.apk` from the **Nym Mobile** Actions artifact
-or the pull request's delivery links. Verify `SHA256SUMS.txt`. Allow installation
+Download `Nym_Mobile_0.1.0_arm64-debug.apk` from the
+[debug prerelease](https://github.com/atlasru/nym/releases/tag/nym-mobile-v0.1.0-debug)
+or the **Nym Mobile** Actions artifact. Verify `SHA256SUMS.txt`. Allow installation
 from the app opening the APK, then install. Package: `dev.atlas.nym`.
 
 The engine and UI are Kotlin/JVM bytecode. Jetpack's small native support libraries
@@ -130,6 +131,12 @@ background dataSync budget; `onTimeout()` stops promptly and retains the
 checkpoint. Battery restrictions, OEM termination, force-stop and reboot can
 interrupt execution. See [foreground-service timeouts](https://developer.android.com/develop/background-work/services/fgs/timeout).
 
+HTTPS-proxy tunneling uses a bounded loopback relay on Android so Android 10's
+TLS provider receives a real socket descriptor for nested TLS. The relay carries
+only encrypted target traffic, closes with the transport and uses two blocking
+relay threads per pooled tunnel. SOCKS5 uses the actual connected socket
+rather than a descriptor-less delegate. No hidden Android API is used.
+
 ## Build and test
 
 JDK 17, Android SDK platform 36 and build tools 35.0.0. Gradle 8.13 wrapper,
@@ -147,13 +154,21 @@ PyInstaller build. Network tests use loopback MockWebServer, not Discord bulk
 traffic. Instrumentation covers database reopening/recovery, duplicate writes,
 dictionary snapshots, encrypted config, CSV/filtering, UI navigation/recreation,
 landscape, foreground/background operation, notification controls, pause/resume,
-cooldown, and CPU/PSS sampling. Screenshots are captured from the running app by
+cooldown, and CPU/PSS sampling. Staged instrumentation also force-stops and manually relaunches the actual app,
+then resumes an interrupted seeded-random checkpoint with an in-flight candidate.
+Authenticated SOCKS5, HTTP 407 and nested proxy/target TLS are exercised with
+Android\'s real socket and TLS providers. A separate explicit smoke makes one
+legitimate Discord request without retries, and records the actual HTTP response.
+Screenshots are captured from the running app by
 UiAutomator, with real engine results from controlled mock responses. Screenshot
 fixtures are not claimed to be live Discord availability.
 
 Performance samples are emulator process CPU and PSS, not physical-device
 battery or throughput claims. No physical Android VPN combination is claimed
-tested unless recorded separately in `docs/VALIDATION.md`.
+tested. The [debug prerelease](https://github.com/atlasru/nym/releases/tag/nym-mobile-v0.1.0-debug)
+contains `VALIDATION.md`, exact smoke responses, CPU/PSS samples and the full
+`Nym_Mobile_0.1.0_validation.zip` reports. Successful CI publishes debug artifacts;
+no production release signing credentials are used.
 
 ## Modules
 
@@ -169,3 +184,11 @@ The Kotlin rewrite reuses desktop protocol, generation tokens, character set,
 classifications and scheduling concepts while removing Python runtime overhead.
 The stronger transactional checkpoint model and global mobile cooldown policy
 are deliberate mobile changes. MIT license follows the source project.
+
+## Actual emulator screenshots
+
+Captured by UiAutomator from the running APK, with loopback test results.
+
+![Home](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.0-debug/01-home-running.png)
+![Results](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.0-debug/03-results.png)
+![Settings](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.0-debug/05-settings.png)
