@@ -78,6 +78,10 @@ jobs:
           packages: 'platform-tools'
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Nym_Mobile_0.1.0_arm64-debug
+          path: android/verified-apk
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -134,3 +138,8 @@ jobs:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           RUN_ID: ${{ github.run_id }}
         run: python3 android/ci/publish-mobile.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nym_Mobile_0.1.0_verified-delivery
+          path: published/
+          if-no-files-found: error
