@@ -17,7 +17,7 @@ import java.util.UUID
 class StorageRecoveryTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val config = ScanConfig(mode = GenerationMode.SEQUENTIAL, length = 2, charset = "ab", limit = 4)
-    @Test fun pendingCandidatesSurviveDatabaseReopenAndRecovery() = runBlocking {
+    @Test fun pendingCandidatesSurviveDatabaseReopenAndRecovery() = runBlocking<Unit> {
         val name = "test-${UUID.randomUUID()}.db"
         var store = SqliteScanStore(context, AppCrypto(), name)
         val session = store.create(config)
@@ -43,7 +43,7 @@ class StorageRecoveryTest {
         assertEquals(1L, store.session(session.id)!!.available)
         store.close(); context.deleteDatabase(name)
     }
-    @Test fun duplicateCompletionIsIdempotentAndLimitIncludesPending() = runBlocking {
+    @Test fun duplicateCompletionIsIdempotentAndLimitIncludesPending() = runBlocking<Unit> {
         val name = "test-${UUID.randomUUID()}.db"
         SqliteScanStore(context, AppCrypto(), name).use { store ->
             val session = store.create(config.copy(limit = 1))
@@ -59,7 +59,7 @@ class StorageRecoveryTest {
         }
         context.deleteDatabase(name)
     }
-    @Test fun csvSearchFilteringAndCooldownSurviveClear() = runBlocking {
+    @Test fun csvSearchFilteringAndCooldownSurviveClear() = runBlocking<Unit> {
         val name = "test-${UUID.randomUUID()}.db"
         SqliteScanStore(context, AppCrypto(), name).use { store ->
             val session = store.create(config)
@@ -81,7 +81,7 @@ class StorageRecoveryTest {
         }
         context.deleteDatabase(name)
     }
-    @Test fun dictionarySnapshotAndSeedSurviveRestart() = runBlocking {
+    @Test fun dictionarySnapshotAndSeedSurviveRestart() = runBlocking<Unit> {
         val name = "test-${UUID.randomUUID()}.db"
         val cfg = config.copy(mode = GenerationMode.DICTIONARY, dictionary = "ALPHA\nalpha\nbeta\ngamma", seed = -999)
         var store = SqliteScanStore(context, AppCrypto(), name)
@@ -98,7 +98,7 @@ class StorageRecoveryTest {
         assertEquals("beta", store.reserve(session.id, CandidateGenerator(restored.config))!!.username)
         store.close(); context.deleteDatabase(name)
     }
-    @Test fun credentialsAreEncryptedInSqlite() = runBlocking {
+    @Test fun credentialsAreEncryptedInSqlite() = runBlocking<Unit> {
         val name = "test-${UUID.randomUUID()}.db"
         SqliteScanStore(context, AppCrypto(), name).use { store ->
             val cfg = config.copy(proxyEnabled = true, proxies = listOf("http://user:secret-test-password@localhost:8080"))

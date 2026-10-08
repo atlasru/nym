@@ -34,6 +34,7 @@ class ScanService : Service() {
     private val graph get() = (application as NymApplication).graph
     private var scan: Job? = null
     private var activeId: String? = null
+    @Volatile private var endingByCommand = false
     private val notifications get() = getSystemService(NotificationManager::class.java)
     override fun onCreate() {
         super.onCreate()
@@ -60,11 +61,13 @@ class ScanService : Service() {
                             return@withLock
                         }
                         activeId = id
+                        endingByCommand = false
                         graph.serviceSession.value = id
                         scan = scope.launch { runSession(id) }
                     }
                     PAUSE, STOP -> {
                         val target = activeId ?: id
+                        endingByCommand = true
                         scan?.cancelAndJoin()
                         if (target != null) {
                             val status = graph.store.session(target)?.status
@@ -74,6 +77,8 @@ class ScanService : Service() {
                             }
                             postFinished(graph.store.session(target))
                         }
+                        graph.serviceSession.value = null
+                        graph.requestRate.value = 0.0
                         finishService()
                     }
                 }
@@ -116,11 +121,15 @@ class ScanService : Service() {
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                 ticker.cancelAndJoin()
                 graph.store.addElapsed(id, (SystemClock.elapsedRealtime() - last).coerceAtLeast(0))
-                if (graph.store.session(id)?.status == SessionStatus.RUNNING) graph.store.status(id, SessionStatus.INTERRUPTED, "Checkpoint saved")
-                graph.serviceSession.value = null
-                graph.requestRate.value = 0.0
-                postFinished(graph.store.session(id))
-                finishService()
+                // Pause/Stop saves its final state before stopping the service.
+                // stopSelf here would let onDestroy cancel the waiting command.
+                if (!endingByCommand) {
+                    if (graph.store.session(id)?.status == SessionStatus.RUNNING) graph.store.status(id, SessionStatus.INTERRUPTED, "Checkpoint saved")
+                    graph.serviceSession.value = null
+                    graph.requestRate.value = 0.0
+                    postFinished(graph.store.session(id))
+                    finishService()
+                }
             }
         }
     }
@@ -147,6 +156,7 @@ class ScanService : Service() {
             else PendingIntent.getService(this, action.hashCode(), intent, flags)
     }
     override fun onTimeout(startId: Int, fgsType: Int) {
+        endingByCommand = true
         scan?.cancel()
         activeId?.let { id -> graph.scope.launch { graph.store.status(id, SessionStatus.INTERRUPTED, "Android foreground-service time limit reached. Resume from the app.") } }
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -92,12 +92,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           working-directory: android
-          script: |
-            ./gradlew :app:connectedDebugAndroidTest --stacktrace
-            mkdir -p device-artifacts
-            adb pull /sdcard/Android/data/dev.atlas.nym/files/screenshots device-artifacts/screenshots
-            adb shell dumpsys meminfo dev.atlas.nym > device-artifacts/meminfo.txt
-            adb logcat -d > device-artifacts/logcat.txt
+          script: bash ci/verify-device.sh ${{ matrix.api }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

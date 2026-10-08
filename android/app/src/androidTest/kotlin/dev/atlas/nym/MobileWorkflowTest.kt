@@ -77,6 +77,7 @@ class MobileWorkflowTest {
         device.setOrientationNatural()
     }
     @Test fun foregroundServiceContinuesInBackgroundAndNotificationControlsWork() {
+        rule.runOnUiThread { model.update(model.preferences.value.copy(scan = model.preferences.value.scan.copy(length = 4, charset = "abcde", limit = 200))) }
         start()
         rule.waitUntil(10_000) { server.requestCount >= 2 }
         val before = server.requestCount
@@ -84,7 +85,8 @@ class MobileWorkflowTest {
         rule.waitUntil(10_000) { server.requestCount >= before + 3 }
         val manager = rule.activity.getSystemService(NotificationManager::class.java)
         val notification = manager.activeNotifications.first { it.id == ScanService.NOTIFICATION }.notification
-        assertTrue(notification.flags and android.app.Notification.FLAG_FOREGROUND_SERVICE != 0)
+        val services = device.executeShellCommand("dumpsys activity services dev.atlas.nym")
+        assertTrue("Service is not foreground: $services", services.contains("isForeground=true"))
         notification.actions.first { it.title.toString() == "Pause" }.actionIntent.send()
         rule.waitUntil(10_000) { graph.serviceSession.value == null }
         val session = runBlocking { graph.store.sessions().first() }
@@ -113,7 +115,7 @@ class MobileWorkflowTest {
         rule.onNodeWithTag("result_list").assertIsDisplayed()
         screenshot("03-results")
         rule.onNodeWithTag("result_search").performTextInput("aaa")
-        rule.onNodeWithText("aaa", substring = false).assertExists()
+        rule.onNode(hasText("aaa") and !hasTestTag("result_search")).assertExists()
         rule.onNodeWithTag("result_search").performTextClearance()
         rule.onNodeWithTag("nav_Sessions").performClick()
         screenshot("04-sessions")

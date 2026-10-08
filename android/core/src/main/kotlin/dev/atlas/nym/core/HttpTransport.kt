@@ -20,6 +20,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLSocketFactory
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -27,6 +28,7 @@ class HttpTransport(
     config: ScanConfig,
     private val endpoint: String = DISCORD_ENDPOINT,
     baseClient: OkHttpClient = OkHttpClient(),
+    proxyTlsFactory: SSLSocketFactory = SSLSocketFactory.getDefault() as SSLSocketFactory,
 ) : CheckTransport {
     private data class Route(val client: OkHttpClient, val display: String, var leased: Boolean = false, var failures: Int = 0, var readyAt: Long = 0, var uses: Long = 0)
     private val timeout = config.timeoutSeconds
@@ -44,7 +46,7 @@ class HttpTransport(
                 else response.request.newBuilder().header("Proxy-Authorization", Credentials.basic(spec.username, spec.password ?: "")).build()
             }
         } else {
-            builder.proxy(Proxy.NO_PROXY).socketFactory(TunnelSocketFactory(spec))
+            builder.proxy(Proxy.NO_PROXY).socketFactory(TunnelSocketFactory(spec, proxyTlsFactory))
             // Target names are resolved by the proxy, never by a local DNS lookup.
             builder.dns(object : Dns {
                 override fun lookup(hostname: String) = listOf(InetAddress.getByAddress(hostname, byteArrayOf(0, 0, 0, 0)))
@@ -83,10 +85,7 @@ class HttpTransport(
             val request = Request.Builder().url(endpoint).header("User-Agent", "NymMobile/0.1.0 (Android)")
                 .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
             val result = route.client.newCall(request).await().use { response ->
-                val text = response.body?.source()?.let { source ->
-                    source.request(65_537)
-                    if (source.buffer.size > 65_536) "Response exceeds 64 KiB" else source.readUtf8()
-                } ?: ""
+                val text = response.boundedBody()
                 ResponseClassifier.classify(username, response.code, text, response.headers.toMap())
             }
             mutex.withLock { route.failures = 0; route.readyAt = 0 }
@@ -113,7 +112,7 @@ class HttpTransport(
                     val delay = (System.nanoTime() - start) / 1_000_000
                     diagnostics += "${route.display} · HTTP ${it.code} · ${delay} ms"
                     if (it.code == 429) {
-                        val result = ResponseClassifier.classify("diagnostic", it.code, it.body?.string()?.take(65_536).orEmpty(), it.headers.toMap())
+                        val result = ResponseClassifier.classify("diagnostic", it.code, it.boundedBody(), it.headers.toMap())
                         onRateLimit(result.retryAfterMs ?: 60_000)
                         diagnostics += "Server cooldown · all diagnostics stopped"
                         limited = true
@@ -141,3 +140,8 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
         }
     })
 }
+
+private fun Response.boundedBody(): String = body?.source()?.let { source ->
+    source.request(65_537)
+    if (source.buffer.size > 65_536) "Response exceeds 64 KiB" else source.readUtf8()
+} ?: ""

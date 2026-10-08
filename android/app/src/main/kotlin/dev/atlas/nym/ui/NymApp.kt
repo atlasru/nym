@@ -341,12 +341,12 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                     GenerationMode.entries.forEach { mode -> FilterChip(config.mode == mode, onClick = { vm.update(prefs.copy(scan = config.copy(mode = mode))) }, label = { Text(modeLabel(mode)) }) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Field("Length · 2–32", config.length.toString(), { it.toIntOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(length = number))) } }, Modifier.weight(1f), KeyboardType.Number, "setting_length")
-                    Field("Check limit", config.limit.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(limit = number))) } }, Modifier.weight(1f), KeyboardType.Number, "setting_limit")
+                    Field("Length · 2–32", config.length.toString(), { vm.update(prefs.copy(scan = config.copy(length = it.toIntOrNull() ?: 0))) }, Modifier.weight(1f), KeyboardType.Number, "setting_length")
+                    Field("Check limit", config.limit.toString(), { vm.update(prefs.copy(scan = config.copy(limit = it.toLongOrNull() ?: 0))) }, Modifier.weight(1f), KeyboardType.Number, "setting_limit")
                 }
                 Field("Character set", config.charset, { vm.update(prefs.copy(scan = config.copy(charset = it))) }, tag = "setting_charset")
                 if (config.mode == GenerationMode.PATTERN) Field("Pattern · @ letter, # digit, * charset", config.pattern, { vm.update(prefs.copy(scan = config.copy(pattern = it))) }, tag = "setting_pattern")
-                if (config.mode == GenerationMode.RANDOM) Field("Random seed", config.seed.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(seed = number))) } }, keyboard = KeyboardType.Number, tag = "setting_seed")
+                if (config.mode == GenerationMode.RANDOM) Field("Random seed", config.seed.toString(), { vm.update(prefs.copy(scan = config.copy(seed = it.toLongOrNull() ?: 0))) }, keyboard = KeyboardType.Number, tag = "setting_seed")
                 if (config.mode == GenerationMode.DICTIONARY) {
                     if (config.dictionary.length < 16_000) Field("Dictionary · one username per line", config.dictionary, { vm.update(prefs.copy(scan = config.copy(dictionary = it))) }, singleLine = false, tag = "setting_dictionary")
                     TextButton(onClick = importDictionary) { Icon(NymIcons.UploadFile, null); Spacer(Modifier.width(8.dp)); Text("Import UTF-8 dictionary") }
@@ -358,9 +358,9 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                 if (preview.isNotEmpty()) Text("Preview: ${preview.joinToString(" · ")}", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Group("Network", NymIcons.Wifi) {
-                Field("Request interval · ms", config.intervalMs.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(intervalMs = number))) } }, keyboard = KeyboardType.Number, tag = "setting_interval")
-                Field("Additional jitter · ms", config.jitterMs.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(jitterMs = number))) } }, keyboard = KeyboardType.Number)
-                Field("Timeout · seconds", config.timeoutSeconds.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(timeoutSeconds = number))) } }, keyboard = KeyboardType.Number)
+                Field("Request interval · ms", config.intervalMs.toString(), { vm.update(prefs.copy(scan = config.copy(intervalMs = it.toLongOrNull() ?: 0))) }, keyboard = KeyboardType.Number, tag = "setting_interval")
+                Field("Additional jitter · ms", config.jitterMs.toString(), { vm.update(prefs.copy(scan = config.copy(jitterMs = it.toLongOrNull() ?: 0))) }, keyboard = KeyboardType.Number)
+                Field("Timeout · seconds", config.timeoutSeconds.toString(), { vm.update(prefs.copy(scan = config.copy(timeoutSeconds = it.toLongOrNull() ?: 0))) }, keyboard = KeyboardType.Number)
                 Text("All workers and proxies share one request cadence. HTTP 429 pauses every route until the server cooldown ends. Resume is manual.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Group("Proxies", NymIcons.Router) {
@@ -387,8 +387,8 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                 Text("HTTP, HTTPS and authenticated SOCKS5 supported. A proxy follows Android's system routing; it does not automatically bypass your VPN.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Group("Performance", NymIcons.Speed) {
-                Field("Concurrent workers · 1–4", config.workers.toString(), { it.toIntOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(workers = number))) } }, keyboard = KeyboardType.Number)
-                Field("Network retries · 0–3", config.retries.toString(), { it.toIntOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(retries = number))) } }, keyboard = KeyboardType.Number)
+                Field("Concurrent workers · 1–4", config.workers.toString(), { vm.update(prefs.copy(scan = config.copy(workers = it.toIntOrNull() ?: 0))) }, keyboard = KeyboardType.Number)
+                Field("Network retries · 0–3", config.retries.toString(), { vm.update(prefs.copy(scan = config.copy(retries = it.toIntOrNull() ?: 0))) }, keyboard = KeyboardType.Number)
                 Text("One request warms up the route. Concurrency starts only after a confirmed response. Retries use bounded backoff.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Group("Storage", NymIcons.Storage) {
