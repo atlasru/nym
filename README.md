@@ -35,6 +35,12 @@ python -m pytest
 python -m ruff check .
 ```
 
+## Android
+
+[Nym Mobile 0.1.0](android/README.md) — native Kotlin/Compose Android 10–16 port,
+with background checking, proxy/VPN diagnostics and durable session checkpoints.
+The existing Windows application remains available above.
+
 ## License
 
 MIT.

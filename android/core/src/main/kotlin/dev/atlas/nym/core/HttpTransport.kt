@@ -1,0 +1,141 @@
+package dev.atlas.nym.core
+
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Credentials
+import okhttp3.Dns
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+class HttpTransport(
+    config: ScanConfig,
+    private val endpoint: String = DISCORD_ENDPOINT,
+    baseClient: OkHttpClient = OkHttpClient(),
+) : CheckTransport {
+    private data class Route(val client: OkHttpClient, val display: String, var leased: Boolean = false, var failures: Int = 0, var readyAt: Long = 0, var uses: Long = 0)
+    private val timeout = config.timeoutSeconds
+    private val cadence = config.intervalMs
+    private val fallback = config.fallbackDirect
+    private val mutex = Mutex()
+    private val direct = Route(configure(baseClient.newBuilder()).proxy(Proxy.NO_PROXY).build(), "Direct")
+    private val routes = if (config.proxyEnabled) config.proxies.map { raw ->
+        val spec = ProxySpec.parse(raw)
+        val builder = configure(baseClient.newBuilder())
+        if (spec.scheme == "http") {
+            builder.proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(spec.host, spec.port)))
+            if (spec.username != null) builder.proxyAuthenticator { _, response ->
+                if (response.request.header("Proxy-Authorization") != null && response.code == 407) null
+                else response.request.newBuilder().header("Proxy-Authorization", Credentials.basic(spec.username, spec.password ?: "")).build()
+            }
+        } else {
+            builder.proxy(Proxy.NO_PROXY).socketFactory(TunnelSocketFactory(spec))
+            // Target names are resolved by the proxy, never by a local DNS lookup.
+            builder.dns(Dns { host -> listOf(InetAddress.getByAddress(host, byteArrayOf(0, 0, 0, 0))) })
+        }
+        Route(builder.build(), spec.display)
+    } else listOf(direct)
+    @Volatile private var canceled = false
+    @Volatile var activeRoute: String = if (config.proxyEnabled) "Proxy pool" else "Direct"
+        private set
+
+    private fun configure(builder: OkHttpClient.Builder) = builder
+        .connectTimeout(timeout, TimeUnit.SECONDS).readTimeout(timeout, TimeUnit.SECONDS).callTimeout(timeout, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
+
+    private suspend fun acquire(): Route {
+        while (!canceled) {
+            val route = mutex.withLock {
+                val now = System.currentTimeMillis()
+                val ready = routes.filter { !it.leased && it.readyAt <= now }.minWithOrNull(compareBy<Route> { it.failures }.thenBy { it.uses })
+                    ?: if (fallback && routes.none { it.readyAt <= now }) direct else null
+                ready?.also { it.leased = true; it.uses++ }
+            }
+            if (route != null) return route
+            delay(100)
+        }
+        throw IOException("Transport canceled")
+    }
+
+    override suspend fun check(username: String): CheckResult {
+        val route = acquire()
+        activeRoute = route.display
+        val started = System.nanoTime()
+        try {
+            val body = JsonObject(mapOf("username" to JsonPrimitive(username))).toString()
+            val request = Request.Builder().url(endpoint).header("User-Agent", "NymMobile/0.1.0 (Android)")
+                .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+            val result = route.client.newCall(request).await().use { response ->
+                val text = response.body?.source()?.let { source ->
+                    source.request(65_537)
+                    if (source.buffer.size > 65_536) "Response exceeds 64 KiB" else source.readUtf8()
+                } ?: ""
+                ResponseClassifier.classify(username, response.code, text, response.headers.toMap())
+            }
+            mutex.withLock { route.failures = 0; route.readyAt = 0 }
+            return result.copy(route = route.display, latencyMs = (System.nanoTime() - started) / 1_000_000)
+        } catch (failure: IOException) {
+            mutex.withLock {
+                route.failures++
+                route.readyAt = System.currentTimeMillis() + (1000L shl route.failures.coerceAtMost(5))
+            }
+            return CheckResult(username, CheckStatus.NETWORK_ERROR,
+                detail = "${failure.javaClass.simpleName}: ${sanitize(failure.message.orEmpty())}", route = route.display,
+                latencyMs = (System.nanoTime() - started) / 1_000_000)
+        } finally { mutex.withLock { route.leased = false } }
+    }
+
+    suspend fun diagnose(onRateLimit: suspend (Long) -> Unit = {}): List<String> {
+        val diagnostics = mutableListOf<String>()
+        for (route in routes) {
+            if (diagnostics.isNotEmpty()) delay(cadence)
+            val start = System.nanoTime()
+            var limited = false
+            try {
+                route.client.newCall(Request.Builder().url("https://discord.com/api/v9/gateway").get().build()).await().use {
+                    val delay = (System.nanoTime() - start) / 1_000_000
+                    diagnostics += "${route.display} · HTTP ${it.code} · ${delay} ms"
+                    if (it.code == 429) {
+                        val result = ResponseClassifier.classify("diagnostic", it.code, it.body?.string()?.take(65_536).orEmpty(), it.headers.toMap())
+                        onRateLimit(result.retryAfterMs ?: 60_000)
+                        diagnostics += "Server cooldown · all diagnostics stopped"
+                        limited = true
+                    }
+                }
+            } catch (failure: IOException) {
+                diagnostics += "${route.display} · ${failure.javaClass.simpleName}: ${sanitize(failure.message.orEmpty())}"
+            }
+            if (limited) break
+        }
+        return diagnostics
+    }
+
+    private fun sanitize(value: String) = value.replace(Regex("(https?|socks5)://[^/@\\s]+@"), "$1://***@").take(512)
+    override fun cancel() { canceled = true; (routes + direct).forEach { it.client.dispatcher.cancelAll() } }
+    override fun close() { cancel(); (routes + direct).forEach { it.client.connectionPool.evictAll(); it.client.dispatcher.executorService.shutdown() } }
+}
+
+private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) { if (continuation.isActive) continuation.resumeWithException(e) }
+        override fun onResponse(call: Call, response: Response) {
+            if (continuation.isActive) continuation.resume(response, onCancellation = { _, value, _ -> value.close() }) else response.close()
+        }
+    })
+}
