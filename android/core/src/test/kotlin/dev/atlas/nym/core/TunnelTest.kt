@@ -15,6 +15,31 @@ import kotlin.test.*
 import org.junit.Test
 
 class TunnelTest {
+    @Test fun closingTunnelClosesTheRealSocketDescriptor() {
+        ServerSocket(0).use { listener ->
+            val executor = Executors.newSingleThreadExecutor()
+            try {
+                val eof = executor.submit<Int> {
+                    listener.accept().use { socket ->
+                        socket.soTimeout = 3000
+                        val input = socket.getInputStream()
+                        val output = socket.getOutputStream()
+                        val hello = input.exact(2); input.exact(hello[1].toInt() and 255)
+                        output.write(byteArrayOf(5, 0)); output.flush()
+                        val connect = input.exact(5)
+                        input.exact(connect[4].toInt() and 255); input.exact(2)
+                        output.write(byteArrayOf(5, 0, 0, 1, 127, 0, 0, 1, 0, 80)); output.flush()
+                        input.read()
+                    }
+                }
+                TunnelSocketFactory(ProxySpec("socks5", "localhost", listener.localPort)).createSocket().use {
+                    it.connect(InetSocketAddress.createUnresolved("discord.com", 443), 3000)
+                }
+                assertEquals(-1, eof.get(4, TimeUnit.SECONDS))
+            } finally { executor.shutdownNow() }
+        }
+    }
+
     @Test fun socks5PerConnectionAuthenticationAndRemoteDns() = runBlocking {
         SocksFixture().use { proxy ->
             HttpTransport(ScanConfig(proxyEnabled = true, proxies = listOf("socks5://user:pass@127.0.0.1:${proxy.port}")), "http://unresolvable.example/check").use {

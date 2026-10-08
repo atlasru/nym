@@ -126,12 +126,13 @@ private class TunnelSocket(private val proxy: ProxySpec, private val tlsFactory:
     override fun getInputStream(): InputStream = if (endpointMode) super.getInputStream() else delegate.getInputStream()
     override fun getOutputStream(): OutputStream = if (endpointMode) super.getOutputStream() else delegate.getOutputStream()
     override fun close() {
-        if (closed) return
+        // Socket.close calls our isClosed(); close its descriptor before setting this flag.
+        // Repeated close also cleans resources assigned during a concurrent cancellation.
+        runCatching { super.close() }
         closed = true
         runCatching { proxyConnection.close() }
         runCatching { delegate.close() }
         runCatching { relayPeer?.close() }
-        runCatching { super.close() }
         relayExecutor?.shutdownNow()
     }
     override fun isClosed() = closed || if (endpointMode) super.isClosed() else delegate.isClosed

@@ -15,6 +15,10 @@ apk_dir = root / "apk"
 apk = apk_dir / "Nym_Mobile_0.1.0_arm64-debug.apk"
 digest = hashlib.sha256(apk.read_bytes()).hexdigest()
 assert digest == (apk_dir / "SHA256SUMS.txt").read_text().split()[0]
+unit_reports = list((root / "unit").rglob("TEST-*.xml"))
+unit_cases = [c for report in unit_reports for c in ET.parse(report).getroot().iter("testcase")]
+assert unit_cases
+assert not any(c.find("failure") is not None or c.find("error") is not None for c in unit_cases)
 summaries = []
 for api in (29, 36):
     reports = list((root / f"api{api}").rglob("TEST-*.xml"))
@@ -46,7 +50,7 @@ fence = chr(96) * 3
 validation.write_text(
     "# Nym Mobile 0.1.0 validation\n\n"
     f"Source commit: {source}\n\nCI: {run_url}\n\n"
-    "- Kotlin core: 35 automated tests.\n"
+    f"- Kotlin core: {len(unit_cases)} automated tests.\n"
     + "".join(f"- {s}\n" for s in summaries)
     + "- APK installed and launched by the real Android test runner.\n"
     "- Actual force-stop/manual-relaunch restores an interrupted random session, "
