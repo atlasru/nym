@@ -90,6 +90,7 @@ class ScanService : Service() {
         var transport: dev.atlas.nym.core.CheckTransport? = null
         var last = SystemClock.elapsedRealtime()
         val rates = ArrayDeque<Pair<Long, Long>>()
+        rates.addLast(last to (graph.store.session(id)?.requests ?: 0L))
         val ticker = scope.launch {
             while (true) {
                 delay(1000)
