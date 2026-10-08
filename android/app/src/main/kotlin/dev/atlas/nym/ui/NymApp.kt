@@ -27,8 +27,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -66,8 +64,8 @@ private val Dark = darkColorScheme(
     surfaceVariant = Color(0xFF1B2029), onBackground = Color(0xFFEBEEF5), onSurface = Color(0xFFEBEEF5),
     onSurfaceVariant = Color(0xFF9099AA), outline = Color(0xFF333C4D), outlineVariant = Color(0xFF232A36))
 private val Light = lightColorScheme(primary = Color(0xFF405D93), background = Color(0xFFF5F6FA), surface = Color.White, surfaceContainer = Color(0xFFEBEEF5))
-private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Icons.Outlined.AlternateEmail,
-    "Sessions" to Icons.Outlined.History, "Settings" to Icons.Outlined.Tune)
+private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons.AlternateEmail,
+    "Sessions" to NymIcons.History, "Settings" to NymIcons.Tune)
 
 @Composable fun NymApp(vm: NymViewModel) {
     val preferences by vm.preferences.collectAsStateWithLifecycle()
@@ -152,7 +150,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
     var confirmStop by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().testTag("screen_Home")) {
         Header("Nym", "USERNAME CHECKER · 0.1.0") {
-            IconButton(onClick = { vm.navigate("Settings") }) { Icon(Icons.Outlined.Tune, "Configure scan") }
+            IconButton(onClick = { vm.navigate("Settings") }) { Icon(NymIcons.Tune, "Configure scan") }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 22.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             RouteLine(network, session?.config ?: preferences.scan)
@@ -195,7 +193,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
                         Text("${modeLabel(config.mode)} · ${if (config.mode == GenerationMode.PATTERN) config.pattern else "${config.length} characters"}", style = MaterialTheme.typography.titleMedium)
                         Text("${config.limit} checks · ${config.intervalMs} ms interval · ${config.workers} worker${if (config.workers == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(NymIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (session == null) Text("Configure a generator, then start. Results and checkpoints stay on this device.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -205,17 +203,17 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
         Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (running) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = { vm.pause() }, modifier = Modifier.weight(1f).height(52.dp).testTag("pause")) { Icon(Icons.Outlined.Pause, null); Spacer(Modifier.width(8.dp)); Text("Pause") }
-                    OutlinedButton(onClick = { confirmStop = true }, modifier = Modifier.weight(1f).height(52.dp).testTag("stop")) { Icon(Icons.Outlined.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop") }
+                    Button(onClick = { vm.pause() }, modifier = Modifier.weight(1f).height(52.dp).testTag("pause")) { Icon(NymIcons.Pause, null); Spacer(Modifier.width(8.dp)); Text("Pause") }
+                    OutlinedButton(onClick = { confirmStop = true }, modifier = Modifier.weight(1f).height(52.dp).testTag("stop")) { Icon(NymIcons.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop") }
                 }
                 TextButton(onClick = { vm.pause(true) }, modifier = Modifier.fillMaxWidth().testTag("checkpoint")) { Text("Save checkpoint and pause") }
             } else {
                 if (session != null && session?.status != SessionStatus.COMPLETED) {
                     Button(onClick = { session?.let(vm::resume) }, enabled = remaining == 0L && !busy,
-                        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("resume")) { Icon(Icons.Outlined.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Resume session") }
+                        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("resume")) { Icon(NymIcons.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Resume session") }
                     TextButton(onClick = onStart, enabled = remaining == 0L && !busy, modifier = Modifier.fillMaxWidth().testTag("new_session")) { Text("Start a new session") }
                 } else Button(onClick = onStart, enabled = remaining == 0L && !busy,
-                    modifier = Modifier.fillMaxWidth().height(52.dp).testTag("start")) { Icon(Icons.Outlined.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Start checking") }
+                    modifier = Modifier.fillMaxWidth().height(52.dp).testTag("start")) { Icon(NymIcons.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Start checking") }
             }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
@@ -233,7 +231,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
 }
 @Composable private fun RouteLine(network: NetworkRoute, config: ScanConfig) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(if (network.vpn) Icons.Outlined.VpnLock else Icons.Outlined.Wifi, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(if (network.vpn) NymIcons.VpnLock else NymIcons.Wifi, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Column {
             Text(network.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (config.proxyEnabled) Text("Proxy routing · ${config.proxies.size} configured · follows system VPN policy", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -248,10 +246,10 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
     var details by remember { mutableStateOf<StoredResult?>(null) }
     Column(Modifier.fillMaxSize().testTag("screen_Results")) {
         Header("Results", if (query.sessionId == null) "ALL SESSIONS" else "SELECTED SESSION") {
-            IconButton(onClick = onExport) { Icon(Icons.Outlined.FileDownload, "Export CSV") }
+            IconButton(onClick = onExport) { Icon(NymIcons.FileDownload, "Export CSV") }
         }
         OutlinedTextField(query.search, { vm.query.value = query.copy(search = it, limit = 200) }, label = { Text("Search usernames") },
-            leadingIcon = { Icon(Icons.Outlined.Search, null) }, singleLine = true, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp).testTag("result_search"))
+            leadingIcon = { Icon(NymIcons.Search, null) }, singleLine = true, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp).testTag("result_search"))
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("Available" to CheckStatus.AVAILABLE, "Unavailable" to CheckStatus.UNAVAILABLE, "Errors" to CheckStatus.UNKNOWN, "All" to null).forEach { (label, status) ->
                 FilterChip(selected = query.status == status, onClick = { vm.query.value = query.copy(status = status, limit = 200) }, label = { Text(label) }, modifier = Modifier.testTag("filter_$label"))
@@ -260,9 +258,9 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
         Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("${results.size} shown", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
             if (query.sessionId != null) TextButton(onClick = { vm.query.value = query.copy(sessionId = null) }) { Text("All sessions") }
-            TextButton(onClick = { vm.query.value = query.copy(ascending = !query.ascending) }) { Icon(Icons.Outlined.Sort, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text(if (query.ascending) "A–Z" else "Newest") }
+            TextButton(onClick = { vm.query.value = query.copy(ascending = !query.ascending) }) { Icon(NymIcons.Sort, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text(if (query.ascending) "A–Z" else "Newest") }
         }
-        if (results.isEmpty()) Empty(Icons.Outlined.AlternateEmail, "No matching results", "Completed checks appear here. Availability is a snapshot, not a reservation.", Modifier.weight(1f))
+        if (results.isEmpty()) Empty(NymIcons.AlternateEmail, "No matching results", "Completed checks appear here. Availability is a snapshot, not a reservation.", Modifier.weight(1f))
         else LazyColumn(Modifier.weight(1f).testTag("result_list"), contentPadding = PaddingValues(bottom = 12.dp)) {
             items(results, key = { it.id }) { item ->
                 Row(Modifier.fillMaxWidth().combinedClickable(onClick = { details = item }, onLongClick = {
@@ -273,7 +271,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
                         Text("${resultLabel(item.result.status)} · ${timestamp(item.result.checkedAt)}", style = MaterialTheme.typography.labelSmall,
                             color = if (item.result.status == CheckStatus.AVAILABLE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    IconButton(onClick = { clipboard.setText(AnnotatedString(item.result.username)); vm.message.value = "Username copied" }) { Icon(Icons.Outlined.ContentCopy, "Copy ${item.result.username}", Modifier.size(20.dp)) }
+                    IconButton(onClick = { clipboard.setText(AnnotatedString(item.result.username)); vm.message.value = "Username copied" }) { Icon(NymIcons.ContentCopy, "Copy ${item.result.username}", Modifier.size(20.dp)) }
                 }
                 HorizontalDivider(Modifier.padding(horizontal = 22.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
@@ -299,7 +297,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
     val until by vm.cooldown.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().testTag("screen_Sessions")) {
         Header("Sessions", "CHECKPOINTS & HISTORY")
-        if (sessions.isEmpty()) Empty(Icons.Outlined.History, "No sessions yet", "Start checking to create the first session. Checkpoints are saved automatically.", Modifier.weight(1f))
+        if (sessions.isEmpty()) Empty(NymIcons.History, "No sessions yet", "Start checking to create the first session. Checkpoints are saved automatically.", Modifier.weight(1f))
         else LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 22.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(sessions, key = { it.id }) { session ->
                 Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
@@ -338,7 +336,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
             TextButton(onClick = { vm.saveSettings() }, enabled = !busy) { Text("Save") }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 22.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Group("Generator", Icons.Outlined.Shuffle, initiallyExpanded = true) {
+            Group("Generator", NymIcons.Shuffle, initiallyExpanded = true) {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GenerationMode.entries.forEach { mode -> FilterChip(config.mode == mode, onClick = { vm.update(prefs.copy(scan = config.copy(mode = mode))) }, label = { Text(modeLabel(mode)) }) }
                 }
@@ -351,7 +349,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
                 if (config.mode == GenerationMode.RANDOM) Field("Random seed", config.seed.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(seed = number))) } }, keyboard = KeyboardType.Number, tag = "setting_seed")
                 if (config.mode == GenerationMode.DICTIONARY) {
                     if (config.dictionary.length < 16_000) Field("Dictionary · one username per line", config.dictionary, { vm.update(prefs.copy(scan = config.copy(dictionary = it))) }, singleLine = false, tag = "setting_dictionary")
-                    TextButton(onClick = importDictionary) { Icon(Icons.Outlined.UploadFile, null); Spacer(Modifier.width(8.dp)); Text("Import UTF-8 dictionary") }
+                    TextButton(onClick = importDictionary) { Icon(NymIcons.UploadFile, null); Spacer(Modifier.width(8.dp)); Text("Import UTF-8 dictionary") }
                     Text("${remember(config.dictionary) { CandidateGenerator.dictionaryWords(config.dictionary).size }} unique valid names · immutable session snapshot", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 val preview = remember(config.mode, config.length, config.charset, config.pattern, config.seed, config.dictionary) {
@@ -359,55 +357,55 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
                 }
                 if (preview.isNotEmpty()) Text("Preview: ${preview.joinToString(" · ")}", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Group("Network", Icons.Outlined.Wifi) {
+            Group("Network", NymIcons.Wifi) {
                 Field("Request interval · ms", config.intervalMs.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(intervalMs = number))) } }, keyboard = KeyboardType.Number, tag = "setting_interval")
                 Field("Additional jitter · ms", config.jitterMs.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(jitterMs = number))) } }, keyboard = KeyboardType.Number)
                 Field("Timeout · seconds", config.timeoutSeconds.toString(), { it.toLongOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(timeoutSeconds = number))) } }, keyboard = KeyboardType.Number)
                 Text("All workers and proxies share one request cadence. HTTP 429 pauses every route until the server cooldown ends. Resume is manual.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Group("Proxies", Icons.Outlined.Router) {
+            Group("Proxies", NymIcons.Router) {
                 Toggle("Use proxy routing", config.proxyEnabled) { vm.update(prefs.copy(scan = config.copy(proxyEnabled = it))) }
                 Toggle("Allow direct fallback on network failure", config.fallbackDirect) { vm.update(prefs.copy(scan = config.copy(fallbackDirect = it))) }
                 var proxyInput by remember { mutableStateOf("") }
                 var show by remember { mutableStateOf(false) }
                 OutlinedTextField(proxyInput, { proxyInput = it }, label = { Text("scheme://user:pass@host:port") }, singleLine = true,
                     visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = { IconButton(onClick = { show = !show }) { Icon(if (show) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, "Toggle proxy visibility") } },
+                    trailingIcon = { IconButton(onClick = { show = !show }) { Icon(if (show) NymIcons.VisibilityOff else NymIcons.Visibility, "Toggle proxy visibility") } },
                     modifier = Modifier.fillMaxWidth().testTag("proxy_input"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                 TextButton(onClick = {
                     runCatching { ProxySpec.parse(proxyInput) }.onSuccess {
                         vm.update(prefs.copy(scan = config.copy(proxies = (config.proxies + proxyInput.trim()).distinct())))
                         proxyInput = ""
                     }.onFailure { vm.message.value = it.message }
-                }, modifier = Modifier.testTag("proxy_add")) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text("Add proxy") }
+                }, modifier = Modifier.testTag("proxy_add")) { Icon(NymIcons.Add, null); Spacer(Modifier.width(8.dp)); Text("Add proxy") }
                 config.proxies.forEach { raw ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(runCatching { ProxySpec.parse(raw).display }.getOrDefault("Invalid proxy"), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        IconButton(onClick = { proxyToRemove = raw }) { Icon(Icons.Outlined.DeleteOutline, "Remove proxy") }
+                        IconButton(onClick = { proxyToRemove = raw }) { Icon(NymIcons.DeleteOutline, "Remove proxy") }
                     }
                 }
                 Text("HTTP, HTTPS and authenticated SOCKS5 supported. A proxy follows Android's system routing; it does not automatically bypass your VPN.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Group("Performance", Icons.Outlined.Speed) {
+            Group("Performance", NymIcons.Speed) {
                 Field("Concurrent workers · 1–4", config.workers.toString(), { it.toIntOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(workers = number))) } }, keyboard = KeyboardType.Number)
                 Field("Network retries · 0–3", config.retries.toString(), { it.toIntOrNull()?.let { number -> vm.update(prefs.copy(scan = config.copy(retries = number))) } }, keyboard = KeyboardType.Number)
                 Text("One request warms up the route. Concurrency starts only after a confirmed response. Retries use bounded backoff.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Group("Storage", Icons.Outlined.Storage) {
+            Group("Storage", NymIcons.Storage) {
                 Text("Results, pending candidates and generator cursor are saved together. CSV export uses the filters on Results.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(onClick = { confirmClear = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Icon(Icons.Outlined.DeleteOutline, null); Spacer(Modifier.width(8.dp)); Text("Clear results and session history") }
+                TextButton(onClick = { confirmClear = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Icon(NymIcons.DeleteOutline, null); Spacer(Modifier.width(8.dp)); Text("Clear results and session history") }
             }
-            Group("Appearance", Icons.Outlined.DarkMode) {
+            Group("Appearance", NymIcons.DarkMode) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("dark", "light", "system").forEach { theme -> FilterChip(prefs.theme == theme, onClick = { vm.update(prefs.copy(theme = theme)) }, label = { Text(theme.replaceFirstChar { it.uppercase() }) }) }
                 }
                 Toggle("Reduce motion", prefs.reducedMotion) { vm.update(prefs.copy(reducedMotion = it)) }
             }
-            Group("Diagnostics", Icons.Outlined.Info) {
+            Group("Diagnostics", NymIcons.Info) {
                 RouteLine(network, config)
                 Text("To keep the phone VPN active while using another route: open your VPN's split-tunneling settings, exclude Nym (dev.atlas.nym), then reconnect. Only the VPN app controls its exclusion list. Always-on VPN with “Block connections without VPN” may block excluded apps.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton(onClick = { runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS)) }.onFailure { vm.message.value = "VPN settings unavailable" } }) { Text("Open Android VPN settings") }
-                TextButton(onClick = { vm.diagnose() }, enabled = !busy, modifier = Modifier.testTag("diagnose")) { Icon(Icons.Outlined.NetworkCheck, null); Spacer(Modifier.width(8.dp)); Text("Test configured routes") }
+                TextButton(onClick = { vm.diagnose() }, enabled = !busy, modifier = Modifier.testTag("diagnose")) { Icon(NymIcons.NetworkCheck, null); Spacer(Modifier.width(8.dp)); Text("Test configured routes") }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 diagnostics.forEach { Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
                 Text("Background checking uses a foreground notification. Android 15+ may stop data-sync services after six background hours. Force-stop, battery restrictions and system termination can interrupt a session; reopen Nym to resume its checkpoint.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -431,7 +429,7 @@ private val destinations = listOf("Home" to Icons.Outlined.Home, "Results" to Ic
                 Icon(icon, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(12.dp))
                 Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, "${if (expanded) "Collapse" else "Expand"} $title")
+                Icon(if (expanded) NymIcons.ExpandLess else NymIcons.ExpandMore, "${if (expanded) "Collapse" else "Expand"} $title")
             }
             AnimatedVisibility(expanded) { Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content) }
         }

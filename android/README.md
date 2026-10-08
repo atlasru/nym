@@ -11,8 +11,9 @@ Download `Nym_Mobile_0.1.0_arm64-debug.apk` from the **Nym Mobile** Actions arti
 or the pull request's delivery links. Verify `SHA256SUMS.txt`. Allow installation
 from the app opening the APK, then install. Package: `dev.atlas.nym`.
 
-The application is managed Kotlin/JVM bytecode, with no native libraries; the
-same APK also runs on the x86_64 test emulators. ARM64 needs no translation.
+The engine and UI are Kotlin/JVM bytecode. Jetpack's small native support libraries
+are packaged for ARM64 and x86_64; the same APK runs on the test emulators.
+ARM64 needs no translation. Other native ABIs are not packaged.
 
 The debug build uses the repository's **public development key**, so subsequent
 debug builds install as updates. That key is not a production signing identity.

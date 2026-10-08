@@ -46,7 +46,9 @@ class HttpTransport(
         } else {
             builder.proxy(Proxy.NO_PROXY).socketFactory(TunnelSocketFactory(spec))
             // Target names are resolved by the proxy, never by a local DNS lookup.
-            builder.dns(Dns { host -> listOf(InetAddress.getByAddress(host, byteArrayOf(0, 0, 0, 0))) })
+            builder.dns(object : Dns {
+                override fun lookup(hostname: String) = listOf(InetAddress.getByAddress(hostname, byteArrayOf(0, 0, 0, 0)))
+            })
         }
         Route(builder.build(), spec.display)
     } else listOf(direct)
