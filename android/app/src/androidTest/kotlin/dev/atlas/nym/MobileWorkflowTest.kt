@@ -133,7 +133,7 @@ class MobileWorkflowTest {
     }
     @Test fun server429StopsAllWorkersAndPersistsCooldown() {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(429).setHeader("Retry-After", "2").setBody("{\"retry_after\":2}")
+            override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(429).setHeader("Retry-After", "5").setBody("{\"retry_after\":5}")
         }
         start(false)
         rule.waitUntil(10_000) { server.requestCount > 0 }
@@ -143,7 +143,16 @@ class MobileWorkflowTest {
         assertEquals(1, server.requestCount)
         assertTrue(runBlocking { graph.store.cooldownUntil() } > System.currentTimeMillis())
         rule.onNodeWithTag("resume").assertIsNotEnabled()
-        Thread.sleep(2200)
+        val manager = rule.activity.getSystemService(NotificationManager::class.java)
+        manager.activeNotifications.first { it.id == ScanService.NOTIFICATION }.notification
+            .actions.first { it.title.toString() == "Resume" }.actionIntent.send()
+        Thread.sleep(300)
+        rule.waitUntil(10_000) {
+            manager.activeNotifications.firstOrNull { it.id == ScanService.NOTIFICATION }?.notification
+                ?.extras?.getString(android.app.Notification.EXTRA_TITLE)?.contains("cooldown") == true
+        }
+        assertEquals(1, server.requestCount)
+        Thread.sleep(5200)
     }
     @Test fun measuredCpuAndMemoryOnEmulator() {
         val idleCpu = Process.getElapsedCpuTime()

@@ -57,6 +57,7 @@ class ScanService : Service() {
                         if (session == null || session.status == SessionStatus.COMPLETED) { finishService(); return@withLock }
                         if (graph.store.cooldownUntil() > System.currentTimeMillis()) {
                             graph.store.status(id, SessionStatus.COOLDOWN, "Server cooldown is still active")
+                            postFinished(graph.store.session(id))
                             finishService()
                             return@withLock
                         }
