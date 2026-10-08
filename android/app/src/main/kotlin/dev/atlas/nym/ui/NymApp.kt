@@ -143,8 +143,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
     val rate by vm.graph.requestRate.collectAsStateWithLifecycle()
     val activeRoute by vm.graph.activeRoute.collectAsStateWithLifecycle()
     val until by vm.cooldown.collectAsStateWithLifecycle()
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(until, service) { while (until > now || service != null) { delay(1000); now = System.currentTimeMillis() } }
+    val now by vm.clock.collectAsStateWithLifecycle()
     val remaining = (until - now).coerceAtLeast(0)
     val running = service != null
     var confirmStop by rememberSaveable { mutableStateOf(false) }
@@ -164,7 +163,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                             style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("session_status"))
                     }
                     Column {
-                        Text(if (session?.current.isNullOrBlank()) "CURRENT CANDIDATE" else "CURRENT CANDIDATE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("CURRENT CANDIDATE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(session?.current?.ifBlank { "—" } ?: "—", style = MaterialTheme.typography.headlineLarge,
                             fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("candidate"))
                     }
@@ -295,6 +294,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
     val sessions by vm.sessions.collectAsStateWithLifecycle()
     val active by vm.graph.serviceSession.collectAsStateWithLifecycle()
     val until by vm.cooldown.collectAsStateWithLifecycle()
+    val now by vm.clock.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().testTag("screen_Sessions")) {
         Header("Sessions", "CHECKPOINTS & HISTORY")
         if (sessions.isEmpty()) Empty(NymIcons.History, "No sessions yet", "Start checking to create the first session. Checkpoints are saved automatically.", Modifier.weight(1f))
@@ -312,7 +312,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = { vm.sessionResults(session) }) { Text("Results") }
                             if (session.status != SessionStatus.COMPLETED && session.status != SessionStatus.RUNNING) {
-                                TextButton(onClick = { vm.resume(session) }, enabled = active == null && until <= System.currentTimeMillis()) { Text("Resume") }
+                                TextButton(onClick = { vm.resume(session) }, enabled = active == null && until <= now) { Text("Resume") }
                             }
                         }
                     }

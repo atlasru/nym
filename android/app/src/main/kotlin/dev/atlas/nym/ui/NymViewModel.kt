@@ -1,3 +1,4 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 package dev.atlas.nym.ui
 
 import android.app.Application
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,6 +52,9 @@ class NymViewModel(application: Application, private val saved: SavedStateHandle
         graph.ready.await(); graph.store.results(it.search, it.status, it.ascending, it.limit, it.sessionId)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val cooldown = MutableStateFlow(0L)
+    val clock = flow {
+        while (true) { emit(System.currentTimeMillis()); delay(1000) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), System.currentTimeMillis())
     private var save: Job? = null
     init {
         viewModelScope.launch {
