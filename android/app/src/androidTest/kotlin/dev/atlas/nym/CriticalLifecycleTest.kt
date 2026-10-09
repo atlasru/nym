@@ -222,11 +222,19 @@ class CriticalLifecycleTest {
     }
     @Test fun staleNotificationStopDoesNotCancelNewSession() {
         val old = runBlocking { graph.store.create(config) }
+        ScanService.send(rule.activity, ScanService.PAUSE, old.id)
+        status(old.id, SessionStatus.PAUSED)
+        val manager = rule.activity.getSystemService(NotificationManager::class.java)
+        rule.waitUntil(5000) { manager.activeNotifications.any { it.id == ScanService.NOTIFICATION &&
+            it.notification.extras.getString(ScanService.SESSION_EXTRA) == old.id &&
+            it.notification.actions.any { action -> action.title.toString() == "Stop" } } }
+        val staleStop = manager.activeNotifications.first { it.id == ScanService.NOTIFICATION }.notification
+            .actions.first { it.title.toString() == "Stop" }.actionIntent
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         rule.runOnUiThread { model.start() }
         assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
         val active = graph.serviceSession.value!!
-        ScanService.send(rule.activity, ScanService.STOP, old.id)
+        staleStop.send()
         rule.waitUntil(5000) { runBlocking { graph.store.session(old.id)!!.status == SessionStatus.STOPPED } }
         assertEquals(active, graph.serviceSession.value)
         ScanService.send(rule.activity, ScanService.STOP, active)
