@@ -52,8 +52,8 @@ class ScanService : Service() {
         // alone cannot interrupt a blocking OkHttp response-body read.
         if ((action == STOP || action == PAUSE) && (id == null || id == activeId)) {
             endingByCommand = true
-            activeTransport?.cancel()
             scan?.cancel()
+            activeTransport?.cancel()
         }
         if (action == START) {
             ServiceCompat.startForeground(this, NOTIFICATION, notification(null, true), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -90,6 +90,7 @@ class ScanService : Service() {
                         }
                         if (ownsWorker) {
                             endingByCommand = true
+                            scan?.cancel()
                             activeTransport?.cancel()
                             scan?.cancelAndJoin()
                             activeTransport = null
@@ -161,9 +162,9 @@ class ScanService : Service() {
                 if (!endingByCommand) {
                     if (graph.store.session(id)?.status == SessionStatus.RUNNING) graph.store.status(id, SessionStatus.INTERRUPTED, "Checkpoint saved")
                     if (activeId == id) activeId = null
+                    postFinished(graph.store.session(id))
                     graph.serviceSession.value = null
                     graph.requestRate.value = 0.0
-                    postFinished(graph.store.session(id))
                     finishService(startId)
                 }
             }
@@ -198,13 +199,13 @@ class ScanService : Service() {
     }
     override fun onTimeout(startId: Int, fgsType: Int) {
         endingByCommand = true
-        activeTransport?.cancel()
         scan?.cancel()
+        activeTransport?.cancel()
         activeId?.let { id -> graph.scope.launch { graph.store.status(id, SessionStatus.INTERRUPTED, "Android foreground-service time limit reached. Resume from the app.") } }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
-    override fun onDestroy() { activeTransport?.cancel(); scope.cancel(); graph.serviceSession.value = null; graph.requestRate.value = 0.0; super.onDestroy() }
+    override fun onDestroy() { scope.cancel(); activeTransport?.cancel(); graph.serviceSession.value = null; graph.requestRate.value = 0.0; super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
     companion object {
         const val START = "nym.START"

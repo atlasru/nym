@@ -52,6 +52,7 @@ class MobileWorkflowTest {
             ScanService.send(rule.activity, ScanService.STOP, id)
             rule.waitUntil(10_000) { graph.serviceSession.value == null }
         }
+        clearMockCooldown(rule.activity)
         server.shutdown()
     }
     private fun start(waitRunning: Boolean = true) {
@@ -146,6 +147,11 @@ class MobileWorkflowTest {
         rule.onNodeWithTag("resume").assertIsNotEnabled()
         rule.onNodeWithTag("stop").assertIsEnabled()
         val manager = rule.activity.getSystemService(NotificationManager::class.java)
+        // NotificationManager publishes updates asynchronously, especially on API 36.
+        rule.waitUntil(5000) {
+            manager.activeNotifications.firstOrNull { it.id == ScanService.NOTIFICATION }?.notification
+                ?.actions?.any { it.title.toString() == "Resume" } == true
+        }
         manager.activeNotifications.first { it.id == ScanService.NOTIFICATION }.notification
             .actions.first { it.title.toString() == "Resume" }.actionIntent.send()
         Thread.sleep(300)

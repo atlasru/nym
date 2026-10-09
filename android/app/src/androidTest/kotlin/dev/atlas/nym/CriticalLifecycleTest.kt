@@ -14,6 +14,8 @@ import dev.atlas.nym.core.*
 import dev.atlas.nym.data.Preferences
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
@@ -27,6 +29,8 @@ import org.junit.Assert.*
 import org.junit.runner.RunWith
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** Every HTTP response is local. No test contacts Discord or rotates around a limit. */
 @RunWith(AndroidJUnit4::class)
@@ -188,6 +192,32 @@ class CriticalLifecycleTest {
         status(id, SessionStatus.STOPPED, 2000)
         waiting.complete(Unit)
         assertEquals(0, server.requestCount)
+        assertEquals("1", runBlocking { graph.store.session(id)!!.cursor })
+    }
+    @Test fun stopCancelsWorkerBeforeReleasingItsPendingResponse() {
+        val entered = CompletableDeferred<Unit>()
+        val response = CompletableDeferred<CheckResult>()
+        val worker = AtomicReference<Job>()
+        val cancelSawActiveWorker = AtomicBoolean(false)
+        graph.transportFactory = { object : CheckTransport {
+            override suspend fun check(username: String): CheckResult {
+                worker.set(currentCoroutineContext()[Job])
+                entered.complete(Unit)
+                return response.await()
+            }
+            override fun cancel() {
+                if (worker.get()?.isActive == true) cancelSawActiveWorker.set(true)
+                response.complete(CheckResult("aa", CheckStatus.AVAILABLE, 200))
+            }
+            override fun close() = cancel()
+        } }
+        rule.onNodeWithTag("start").performClick()
+        rule.waitUntil(5000) { graph.serviceSession.value != null && entered.isCompleted }
+        val id = graph.serviceSession.value!!
+        ScanService.send(rule.activity, ScanService.STOP, id)
+        status(id, SessionStatus.STOPPED, 2000)
+        assertFalse("A response was released before its worker was canceled", cancelSawActiveWorker.get())
+        assertEquals(0L, runBlocking { graph.store.session(id)!!.checked })
         assertEquals("1", runBlocking { graph.store.session(id)!!.cursor })
     }
     @Test fun staleNotificationStopDoesNotCancelNewSession() {
