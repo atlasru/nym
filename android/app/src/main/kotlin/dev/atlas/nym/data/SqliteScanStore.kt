@@ -124,13 +124,14 @@ class SqliteScanStore(context: Context, private val crypto: AppCrypto, name: Str
     }
     override suspend fun recordAttempt(id: String, result: CheckResult) = access(true) { db ->
         val error = if (result.status in setOf(CheckStatus.UNKNOWN, CheckStatus.NETWORK_ERROR, CheckStatus.RATE_LIMITED)) 1 else 0
-        db.execSQL("UPDATE sessions SET requests=requests+1, errors=errors+?, detail=? WHERE id=?", arrayOf(error, result.detail, id))
+        db.execSQL("UPDATE sessions SET requests=requests+1, errors=errors+?, detail=CASE WHEN status='RUNNING' THEN ? ELSE detail END WHERE id=?", arrayOf(error, result.detail, id))
     }
     override suspend fun status(id: String, status: SessionStatus, detail: String) = access(true) { db ->
         db.execSQL("UPDATE sessions SET status=?, detail=? WHERE id=?", arrayOf(status.name, detail, id))
     }
     override suspend fun network(id: String, status: NetworkStatus) = access(true) { db ->
-        db.execSQL("UPDATE sessions SET network=? WHERE id=?", arrayOf(status.name, id))
+        if (status == NetworkStatus.RATE_LIMITED) db.execSQL("UPDATE sessions SET network=? WHERE id=?", arrayOf(status.name, id))
+        else db.execSQL("UPDATE sessions SET network=? WHERE id=? AND status='RUNNING'", arrayOf(status.name, id))
     }
     override suspend fun rateLimited(id: String, result: CheckResult, until: Long) = access(true) { db ->
         saveCooldown(db, until)

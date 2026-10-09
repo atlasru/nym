@@ -17,6 +17,11 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
+import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
+import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -62,7 +67,7 @@ class CriticalLifecycleTest {
             graph.store.sessions().firstOrNull()?.networkStatus == NetworkStatus.RATE_LIMITED
         } }
         rule.waitUntil(5000) { model.current.value?.networkStatus == NetworkStatus.RATE_LIMITED }
-        return runBlocking { graph.store.sessions().first() }
+        return runBlocking { graph.store.session(graph.store.sessions().first().id)!! }
     }
     private fun status(id: String, status: SessionStatus, timeout: Long = 5000) {
         rule.waitUntil(timeout) { graph.serviceSession.value == null && runBlocking { graph.store.session(id)?.status == status } }
@@ -137,15 +142,34 @@ class CriticalLifecycleTest {
         status(session.id, SessionStatus.STOPPED)
     }
     @Test fun pendingHttpBodyStopThenRestartResumesSameCandidateOnce() {
+        val bodyStarted = CompletableDeferred<Unit>()
+        val client = OkHttpClient.Builder().addNetworkInterceptor { chain ->
+            val response = chain.proceed(chain.request())
+            val body = requireNotNull(response.body)
+            response.newBuilder().body(object : ResponseBody() {
+                private val stream = object : ForwardingSource(body.source()) {
+                    override fun read(sink: Buffer, byteCount: Long): Long {
+                        bodyStarted.complete(Unit)
+                        return super.read(sink, byteCount)
+                    }
+                }.buffer()
+                override fun contentType() = body.contentType()
+                override fun contentLength() = body.contentLength()
+                override fun source() = stream
+            }).build()
+        }.build()
+        graph.transportFactory = { HttpTransport(it, server.url("/check").toString(), client) }
         server.enqueue(MockResponse().setBody("{\"taken\":false}").setBodyDelay(5, TimeUnit.SECONDS))
         rule.onNodeWithTag("start").performClick()
         assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+        rule.waitUntil(5000) { bodyStarted.isCompleted }
         val session = runBlocking { graph.store.sessions().first() }
         val started = SystemClock.elapsedRealtime()
         ScanService.send(rule.activity, ScanService.STOP, session.id)
         status(session.id, SessionStatus.STOPPED, 2000)
         assertTrue(SystemClock.elapsedRealtime() - started < 2000)
         assertEquals(0L, runBlocking { graph.store.session(session.id)!!.checked })
+        graph.transportFactory = { HttpTransport(it, server.url("/check").toString()) }
         repeat(4) { server.enqueue(MockResponse().setBody("{\"taken\":false}")) }
         ScanService.send(rule.activity, ScanService.START, session.id)
         status(session.id, SessionStatus.COMPLETED, 10_000)
@@ -155,9 +179,10 @@ class CriticalLifecycleTest {
     }
     @Test fun stopCancelsOfflineWaitAndRapidStartStopCannotResurrectWorker() {
         val waiting = CompletableDeferred<Unit>()
-        graph.transportFactory = { NetworkAwareTransport(HttpTransport(it, server.url("/check").toString())) { waiting.await() } }
+        val entered = CompletableDeferred<Unit>()
+        graph.transportFactory = { NetworkAwareTransport(HttpTransport(it, server.url("/check").toString())) { entered.complete(Unit); waiting.await() } }
         rule.onNodeWithTag("start").performClick()
-        rule.waitUntil(5000) { graph.serviceSession.value != null }
+        rule.waitUntil(5000) { graph.serviceSession.value != null && entered.isCompleted }
         val id = graph.serviceSession.value!!
         repeat(8) { ScanService.send(rule.activity, ScanService.STOP, id) }
         status(id, SessionStatus.STOPPED, 2000)
@@ -168,7 +193,7 @@ class CriticalLifecycleTest {
     @Test fun staleNotificationStopDoesNotCancelNewSession() {
         val old = runBlocking { graph.store.create(config) }
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
-        rule.onNodeWithTag("start").performClick()
+        rule.runOnUiThread { model.start() }
         assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
         val active = graph.serviceSession.value!!
         ScanService.send(rule.activity, ScanService.STOP, old.id)
@@ -176,6 +201,16 @@ class CriticalLifecycleTest {
         assertEquals(active, graph.serviceSession.value)
         ScanService.send(rule.activity, ScanService.STOP, active)
         status(active, SessionStatus.STOPPED, 2000)
+    }
+    @Test fun stopIsAvailableFromEveryPersistedNonterminalState() {
+        for (initial in listOf(SessionStatus.PAUSED, SessionStatus.ERROR, SessionStatus.INTERRUPTED, SessionStatus.COOLDOWN, SessionStatus.STOPPING)) {
+            val id = runBlocking {
+                graph.store.create(config).id.also { graph.store.status(it, initial) }
+            }
+            ScanService.send(rule.activity, ScanService.STOP, id)
+            status(id, SessionStatus.STOPPED, 2000)
+        }
+        assertEquals(0, server.requestCount)
     }
 }
 

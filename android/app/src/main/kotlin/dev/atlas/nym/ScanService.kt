@@ -64,6 +64,9 @@ class ScanService : Service() {
                 when (action) {
                     START -> {
                         if (scan?.isActive == true) return@withLock
+                        // A canceled/completing run still owns its final checkpoint
+                        // and notification until its finally block has completed.
+                        scan?.join()
                         if (id == null) { finishService(startId); return@withLock }
                         val session = graph.store.session(id)
                         if (session == null || session.status == SessionStatus.COMPLETED) { finishService(startId); return@withLock }
@@ -76,6 +79,7 @@ class ScanService : Service() {
                         activeId = id
                         endingByCommand = false
                         graph.serviceSession.value = id
+                        ServiceCompat.startForeground(this@ScanService, NOTIFICATION, notification(session, true), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
                         scan = scope.launch { runSession(id, startId) }
                     }
                     PAUSE, STOP -> {

@@ -39,7 +39,10 @@ def read_evidence(api, name):
     return (root / f"api{api}" / "device-artifacts" / "screenshots" / name).read_text()
 
 
-recovery = [read_evidence(api, "process-recovery.txt") + read_evidence(api, "cooldown-process-recovery.txt") for api in (29, 36)]
+recovery = [
+    read_evidence(api, "process-recovery.txt") + read_evidence(api, "cooldown-process-recovery.txt")
+    for api in (29, 36)
+]
 performance = [read_evidence(api, "performance.txt") for api in (29, 36)]
 out = Path("published")
 out.mkdir(exist_ok=True)

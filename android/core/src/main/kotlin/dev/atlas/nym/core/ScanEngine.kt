@@ -1,6 +1,5 @@
 package dev.atlas.nym.core
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -55,8 +54,7 @@ class ScanEngine(private val store: ScanStore, private val transport: CheckTrans
             // timer survives this run. Checking resumes only on an explicit Start.
         } finally {
             transport.cancel()
-            withContext(NonCancellable) { store.releasePending(id) }
-            transport.close()
+            try { withContext(NonCancellable) { store.releasePending(id) } } finally { transport.close() }
         }
     }
 
@@ -79,6 +77,7 @@ class ScanEngine(private val store: ScanStore, private val transport: CheckTrans
             if (!allowed) return null
             coroutineContext.ensureActive()
             store.network(id, NetworkStatus.REQUESTING)
+            if (halt.get() || store.cooldownUntil() > clock()) return null
             val result = transport.check(candidate.username)
             if (halt.get() && result.status != CheckStatus.RATE_LIMITED) return null
             if (result.status == CheckStatus.RATE_LIMITED) {
@@ -101,6 +100,7 @@ class ScanEngine(private val store: ScanStore, private val transport: CheckTrans
             store.complete(id, candidate, result)
             if (result.httpStatus in setOf(401, 403) || result.detail.contains("captcha", ignoreCase = true)) {
                 halt.set(true)
+                store.network(id, NetworkStatus.ERROR)
                 store.status(id, SessionStatus.ERROR, "Access denied / verification required. Checking stopped. ${result.detail}")
                 transport.cancel()
                 throw HaltChecking()

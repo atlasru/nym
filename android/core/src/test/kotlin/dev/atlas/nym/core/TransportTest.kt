@@ -8,8 +8,14 @@ import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
+import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
+import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
 import kotlin.test.*
 import org.junit.Test
 
@@ -28,10 +34,27 @@ class TransportTest {
     }
     @Test fun stopCancelsPendingBodyAndClosedTransportCannotEmitMoreRequests() = runBlocking {
         MockWebServer().use { server ->
-            server.enqueue(MockResponse().setBody("{\"taken\":false}").setBodyDelay(30, TimeUnit.SECONDS))
-            HttpTransport(ScanConfig(timeoutSeconds = 60), server.url("/check").toString()).use { transport ->
+            server.enqueue(MockResponse().setBody("{\"taken\":false}").setBodyDelay(5, TimeUnit.SECONDS))
+            val bodyStarted = CountDownLatch(1)
+            val client = OkHttpClient.Builder().addNetworkInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                val body = requireNotNull(response.body)
+                response.newBuilder().body(object : ResponseBody() {
+                    private val stream = object : ForwardingSource(body.source()) {
+                        override fun read(sink: Buffer, byteCount: Long): Long {
+                            bodyStarted.countDown()
+                            return super.read(sink, byteCount)
+                        }
+                    }.buffer()
+                    override fun contentType() = body.contentType()
+                    override fun contentLength() = body.contentLength()
+                    override fun source() = stream
+                }).build()
+            }.build()
+            HttpTransport(ScanConfig(timeoutSeconds = 60), server.url("/check").toString(), client).use { transport ->
                 val job = async(Dispatchers.IO) { transport.check("name") }
                 assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+                assertTrue(bodyStarted.await(2, TimeUnit.SECONDS))
                 withTimeout(1000) { transport.cancel(); job.cancelAndJoin() }
                 assertFailsWith<java.io.IOException> { transport.check("other") }
             }

@@ -22,6 +22,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLSocketFactory
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -37,6 +38,9 @@ class HttpTransport(
     private val cadence = config.intervalMs
     private val fallback = config.fallbackDirect
     private val mutex = Mutex()
+    // Dispatcher stops tracking an async Call after onResponse returns, even if
+    // the consumer is still reading its body. Keep ownership until body.close().
+    private val calls = ConcurrentHashMap.newKeySet<Call>()
     private val direct = Route(configure(baseClient.newBuilder()).proxy(Proxy.NO_PROXY).build(), "Direct")
     private val routes = if (config.proxyEnabled) config.proxies.map { raw ->
         val spec = ProxySpec.parse(raw)
@@ -86,7 +90,7 @@ class HttpTransport(
             val body = JsonObject(mapOf("username" to JsonPrimitive(username))).toString()
             val request = Request.Builder().url(endpoint).header("User-Agent", "NymMobile/0.1.1 (Android)")
                 .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
-            val result = route.client.newCall(request).await().use { response ->
+            val result = execute(route.client, request) { response ->
                 val text = response.boundedBody()
                 ResponseClassifier.classify(username, response.code, text, response.headers.toMap())
             }
@@ -110,11 +114,12 @@ class HttpTransport(
             if (diagnostics.isNotEmpty()) delay(cadence)
             val start = System.nanoTime()
             try {
-                route.client.newCall(Request.Builder().url(endpoint).get().build()).await().use {
+                execute(route.client, Request.Builder().url(endpoint).get().build()) {
                     val delay = (System.nanoTime() - start) / 1_000_000
                     diagnostics += "${route.display} · HTTP ${it.code} · ${delay} ms"
-                    if (it.code == 429) return diagnostics + "Connectivity target rate limited · diagnostics stopped"
+                    if (it.code == 429) diagnostics += "Connectivity target rate limited · diagnostics stopped"
                 }
+                if (diagnostics.last().contains("rate limited")) break
             } catch (failure: IOException) {
                 diagnostics += "${route.display} · ${failure.javaClass.simpleName}: ${sanitize(failure.message.orEmpty())}"
             }
@@ -123,7 +128,15 @@ class HttpTransport(
     }
 
     private fun sanitize(value: String) = value.replace(Regex("(https?|socks5)://[^/@\\s]+@"), "$1://***@").take(512)
-    override fun cancel() { canceled = true; (routes + direct).forEach { it.client.dispatcher.cancelAll() } }
+    private suspend fun <T> execute(client: OkHttpClient, request: Request, read: (Response) -> T): T {
+        val call = client.newCall(request)
+        calls.add(call)
+        try {
+            if (canceled) call.cancel()
+            return call.await().use(read)
+        } finally { calls.remove(call) }
+    }
+    override fun cancel() { canceled = true; calls.forEach { it.cancel() }; (routes + direct).forEach { it.client.dispatcher.cancelAll() } }
     override fun close() { cancel(); (routes + direct).forEach { it.client.connectionPool.evictAll(); it.client.dispatcher.executorService.shutdown() } }
 }
 
