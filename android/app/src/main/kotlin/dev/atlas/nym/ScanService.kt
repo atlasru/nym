@@ -42,6 +42,7 @@ class ScanService : Service() {
     @Volatile private var activeId: String? = null
     @Volatile private var activeTransport: CheckTransport? = null
     @Volatile private var endingByCommand = false
+    @Volatile private var finishing = false
     @Volatile private var foreground = false
     private val notifications get() = getSystemService(NotificationManager::class.java)
     override fun onCreate() {
@@ -66,7 +67,7 @@ class ScanService : Service() {
                 graph.ready.await()
                 when (action) {
                     START -> {
-                        if (scan?.isActive == true) return@withLock
+                        if (scan?.isActive == true && !finishing) return@withLock
                         // A canceled/completing run still owns its final checkpoint
                         // and notification until its finally block has completed.
                         scan?.join()
@@ -81,6 +82,7 @@ class ScanService : Service() {
                         }
                         activeId = id
                         endingByCommand = false
+                        finishing = false
                         graph.serviceSession.value = id
                         enterForeground(notification(session, true))
                         scan = scope.launch { runSession(id, startId) }
@@ -159,6 +161,7 @@ class ScanService : Service() {
         } catch (canceled: CancellationException) { throw canceled }
         catch (failure: Exception) { graph.store.status(id, SessionStatus.ERROR, "${failure.javaClass.simpleName}: ${failure.message}") }
         finally {
+            finishing = true
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                 ticker.cancelAndJoin()
                 transport?.close()
@@ -168,11 +171,11 @@ class ScanService : Service() {
                 // stopSelf here would let onDestroy cancel the waiting command.
                 if (!endingByCommand) {
                     if (graph.store.session(id)?.status == SessionStatus.RUNNING) graph.store.status(id, SessionStatus.INTERRUPTED, "Checkpoint saved")
-                    if (activeId == id) activeId = null
                     postFinished(graph.store.session(id))
                     graph.serviceSession.value = null
                     graph.requestRate.value = 0.0
                     finishService(startId)
+                    if (activeId == id) activeId = null
                 }
             }
         }
