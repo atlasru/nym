@@ -1,14 +1,14 @@
-# Nym Mobile 0.1.0
+# Nym Mobile 0.1.1
 
-Native Android port of [atlasru/nym](https://github.com/atlasru/nym), based on
-`65741cfef7fd413315601ce04f32f9a4fa7ae306`. Android 10–16 (API 29–36), ARM64 primary.
+Native Android port of [atlasru/nym](https://github.com/atlasru/nym), Bugfix based on the latest Android implementation
+`d80d155aef2d4cff32c628a54f3f590f84025a1c`. Android 10–16 (API 29–36), ARM64 primary.
 Kotlin, Compose, Material 3, coroutines/Flow, OkHttp, SQLite WAL, DataStore.
 No Python runtime or WebView. Existing Windows/Python sources are unchanged.
 
 ## Install
 
-Download `Nym_Mobile_0.1.0_arm64-debug.apk` from the
-[debug prerelease](https://github.com/atlasru/nym/releases/tag/nym-mobile-v0.1.0-debug)
+Download `Nym_Mobile_0.1.1_arm64-debug.apk` from the
+[debug prerelease](https://github.com/atlasru/nym/releases/tag/nym-mobile-v0.1.1-debug)
 or the **Nym Mobile** Actions artifact. Verify `SHA256SUMS.txt`. Allow installation
 from the app opening the APK, then install. Package: `dev.atlas.nym`.
 
@@ -60,11 +60,13 @@ use bounded exponential backoff. Redirects and automatic OkHttp retries are off.
 Offline execution waits for a validated system network rather than consuming
 candidates. Pause cancels active requests promptly.
 
-**Any HTTP 429 stops the entire mobile session.** The maximum server Retry-After
+**Any HTTP 429 pauses checking on every mobile route.** Session lifecycle and
+network status are separate. Stop remains available while paused/rate limited,
+including a 30-minute Retry-After, and saves a STOPPED checkpoint immediately. The maximum server Retry-After
 (numeric or HTTP date), JSON retry_after and reset-after is honored; absent or
 malformed delays default to 60 seconds. Cooldown is persisted across process
-restart, new sessions, proxy changes and history deletion. All routes and
-diagnostics observe it. Resume is manual after expiration. The pending candidate
+restart, new sessions, proxy changes and history deletion. All checking routes observe it. Proxy connectivity tests use example.com,
+independent of Discord, and remain accessible during cooldown. Resume is manual after expiration. The pending candidate
 is retained. Proxy rotation is never used to avoid a service limit.
 
 ## Proxies and an active VPN
@@ -157,17 +159,18 @@ landscape, foreground/background operation, notification controls, pause/resume,
 cooldown, and CPU/PSS sampling. Staged instrumentation also force-stops and manually relaunches the actual app,
 then resumes an interrupted seeded-random checkpoint with an in-flight candidate.
 Authenticated SOCKS5, HTTP 407 and nested proxy/target TLS are exercised with
-Android\'s real socket and TLS providers. A separate explicit smoke makes one
-legitimate Discord request without retries, and records the actual HTTP response.
+Android\'s real socket and TLS providers. This bugfix uses only mocked networking. The 1800-second cooldown scenario,
+notification Stop, blocked request body, and real force-stop cooldown recovery
+are exercised on both emulators.
 Screenshots are captured from the running app by
 UiAutomator, with real engine results from controlled mock responses. Screenshot
 fixtures are not claimed to be live Discord availability.
 
 Performance samples are emulator process CPU and PSS, not physical-device
 battery or throughput claims. No physical Android VPN combination is claimed
-tested. The [debug prerelease](https://github.com/atlasru/nym/releases/tag/nym-mobile-v0.1.0-debug)
-contains `VALIDATION.md`, exact smoke responses, CPU/PSS samples and the full
-`Nym_Mobile_0.1.0_validation.zip` reports. Successful CI publishes debug artifacts;
+tested. The [debug prerelease](https://github.com/atlasru/nym/releases/tag/nym-mobile-v0.1.1-debug)
+contains `VALIDATION.md`, exact mocked 429 Stop timings, CPU/PSS samples and the full
+`Nym_Mobile_0.1.1_validation.zip` reports. Successful CI publishes debug artifacts;
 no production release signing credentials are used.
 
 ## Modules
@@ -189,6 +192,6 @@ are deliberate mobile changes. MIT license follows the source project.
 
 Captured by UiAutomator from the running APK, with loopback test results.
 
-![Home](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.0-debug/01-home-running.png)
-![Results](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.0-debug/03-results.png)
-![Settings](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.0-debug/05-settings.png)
+![Home](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.1-debug/01-home-running.png)
+![Results](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.1-debug/03-results.png)
+![Settings](https://github.com/atlasru/nym/releases/download/nym-mobile-v0.1.1-debug/05-settings.png)

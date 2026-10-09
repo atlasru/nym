@@ -9,7 +9,7 @@ collect() {
 }
 trap collect EXIT
 ./gradlew :app:assembleDebugAndroidTest --stacktrace
-adb install -r verified-apk/Nym_Mobile_0.1.0_arm64-debug.apk
+adb install -r verified-apk/Nym_Mobile_0.1.1_arm64-debug.apk
 adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am start -W -n dev.atlas.nym/.MainActivity
 installed_path="$(adb shell pm path dev.atlas.nym | tr -d '\r' | sed -n 's/^package://p' | head -n 1)"
@@ -28,7 +28,9 @@ adb shell am force-stop dev.atlas.nym
 adb shell am start -W -n dev.atlas.nym/.MainActivity
 adb shell am instrument -w -e listener "$listener" -e reportName recovery-verify -e class dev.atlas.nym.ProcessRecoveryTest#resumeAfterProcessRestart -e recoveryStage verify "$runner" | tee recovery-resume-run.txt
 grep -q 'OK (1 test)' recovery-resume-run.txt
-if [ "$1" = "36" ]; then
-  adb shell am instrument -w -e listener "$listener" -e reportName production -e class dev.atlas.nym.ProductionEndpointSmokeTest -e liveSmoke true "$runner" | tee production-smoke-run.txt
-  grep -q 'OK (1 test)' production-smoke-run.txt
-fi
+adb shell am instrument -w -e listener "$listener" -e reportName cooldown-prepare -e class dev.atlas.nym.ProcessRecoveryTest#prepareRateLimitedCheckpoint -e recoveryStage cooldown-prepare "$runner" | tee cooldown-prepare-run.txt
+grep -q 'OK (1 test)' cooldown-prepare-run.txt
+adb shell am force-stop dev.atlas.nym
+adb shell am start -W -n dev.atlas.nym/.MainActivity
+adb shell am instrument -w -e listener "$listener" -e reportName cooldown-verify -e class dev.atlas.nym.ProcessRecoveryTest#rateLimitSurvivesActualProcessTerminationAndStop -e recoveryStage cooldown-verify "$runner" | tee cooldown-verify-run.txt
+grep -q 'OK (1 test)' cooldown-verify-run.txt

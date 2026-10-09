@@ -84,6 +84,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
         if (!granted) vm.message.value = "Notification permission denied. Android can still run the service; controls remain in the app."
     }
     val dictionaryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importDictionary) }
+    val proxyPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::importProxies) }
     val csvPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { it?.let(vm::export) }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.message.value = null } }
     SideEffect {
@@ -121,7 +122,9 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                         })
                         "Results" -> Results(vm) { csvPicker.launch("Nym_results.csv") }
                         "Sessions" -> Sessions(vm)
-                        "Settings" -> Settings(vm) { dictionaryPicker.launch(arrayOf("text/plain", "text/*", "application/octet-stream")) }
+                        "Settings" -> Settings(vm,
+                            importDictionary = { dictionaryPicker.launch(arrayOf("text/plain", "text/*", "application/octet-stream")) },
+                            importProxies = { proxyPicker.launch(arrayOf("text/plain", "text/*", "application/octet-stream")) })
                     }
                 }
             }
@@ -150,9 +153,9 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
     val now by vm.clock.collectAsStateWithLifecycle()
     val remaining = (until - now).coerceAtLeast(0)
     val running = service != null
-    var confirmStop by rememberSaveable { mutableStateOf(false) }
+    val liveNetwork by vm.graph.networkStatus.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().testTag("screen_Home")) {
-        Header("Nym", "USERNAME CHECKER · 0.1.0") {
+        Header("Nym", "USERNAME CHECKER · 0.1.1") {
             IconButton(onClick = { vm.navigate("Settings") }) { Icon(NymIcons.Tune, "Configure scan") }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 22.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -163,9 +166,12 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(6.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(3.dp)))
                         Spacer(Modifier.width(8.dp))
-                        Text(if (remaining > 0) "Server cooldown · ${duration(remaining)}" else statusLabel(session?.status),
+                        Text(statusLabel(session?.status),
                             style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("session_status"))
                     }
+                    if (remaining > 0) Text("Rate limited · ${duration(remaining)} remaining", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("network_status"))
+                    else if (running && liveNetwork == NetworkStatus.OFFLINE) Text("Offline · waiting for network", modifier = Modifier.testTag("network_status"))
                     Column {
                         Text("CURRENT CANDIDATE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(session?.current?.ifBlank { "—" } ?: "—", style = MaterialTheme.typography.headlineLarge,
@@ -207,11 +213,16 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
             if (running) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = { vm.pause() }, modifier = Modifier.weight(1f).height(52.dp).testTag("pause")) { Icon(NymIcons.Pause, null); Spacer(Modifier.width(8.dp)); Text("Pause") }
-                    OutlinedButton(onClick = { confirmStop = true }, modifier = Modifier.weight(1f).height(52.dp).testTag("stop")) { Icon(NymIcons.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop") }
+                    OutlinedButton(onClick = { vm.stop() }, modifier = Modifier.weight(1f).height(52.dp).testTag("stop")) { Icon(NymIcons.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop") }
                 }
                 TextButton(onClick = { vm.pause(true) }, modifier = Modifier.fillMaxWidth().testTag("checkpoint")) { Text("Save checkpoint and pause") }
             } else {
                 if (session != null && session?.status != SessionStatus.COMPLETED) {
+                    if (session?.status != SessionStatus.STOPPED) {
+                        OutlinedButton(onClick = { vm.stop() }, modifier = Modifier.fillMaxWidth().height(52.dp).testTag("stop")) {
+                            Icon(NymIcons.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop")
+                        }
+                    }
                     Button(onClick = { session?.let(vm::resume) }, enabled = remaining == 0L && !busy,
                         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("resume")) { Icon(NymIcons.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Resume session") }
                     TextButton(onClick = onStart, enabled = remaining == 0L && !busy, modifier = Modifier.fillMaxWidth().testTag("new_session")) { Text("Start a new session") }
@@ -221,7 +232,6 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
     }
-    if (confirmStop) Confirm("Stop this session?", "The checkpoint remains available for resume.", "Stop", { confirmStop = false; vm.stop() }, { confirmStop = false })
 }
 
 @Composable private fun Counter(label: String, value: Long, reduced: Boolean, modifier: Modifier) {
@@ -328,7 +338,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
     }
 }
 
-@Composable private fun Settings(vm: NymViewModel, importDictionary: () -> Unit) {
+@Composable private fun Settings(vm: NymViewModel, importDictionary: () -> Unit, importProxies: () -> Unit) {
     val prefs by vm.preferences.collectAsStateWithLifecycle()
     val config = prefs.scan
     val busy by vm.busy.collectAsStateWithLifecycle()
@@ -373,20 +383,23 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                 Toggle("Use proxy routing", config.proxyEnabled) { vm.update(prefs.copy(scan = config.copy(proxyEnabled = it))) }
                 Toggle("Allow direct fallback on network failure", config.fallbackDirect) { vm.update(prefs.copy(scan = config.copy(fallbackDirect = it))) }
                 var proxyInput by remember { mutableStateOf("") }
+                var editing by remember { mutableStateOf<String?>(null) }
                 var show by remember { mutableStateOf(false) }
-                OutlinedTextField(proxyInput, { proxyInput = it }, label = { Text("scheme://user:pass@host:port") }, singleLine = true,
+                OutlinedTextField(proxyInput, { proxyInput = it }, label = { Text("Proxy URLs · one per line") }, singleLine = false,
                     visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = { IconButton(onClick = { show = !show }) { Icon(if (show) NymIcons.VisibilityOff else NymIcons.Visibility, "Toggle proxy visibility") } },
                     modifier = Modifier.fillMaxWidth().testTag("proxy_input"), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                 TextButton(onClick = {
-                    runCatching { ProxySpec.parse(proxyInput) }.onSuccess {
-                        vm.update(prefs.copy(scan = config.copy(proxies = (config.proxies + proxyInput.trim()).distinct())))
+                    if (vm.addProxies(proxyInput, editing)) {
                         proxyInput = ""
-                    }.onFailure { vm.message.value = it.message }
-                }, modifier = Modifier.testTag("proxy_add")) { Icon(NymIcons.Add, null); Spacer(Modifier.width(8.dp)); Text("Add proxy") }
+                        editing = null
+                    }
+                }, modifier = Modifier.testTag("proxy_add")) { Icon(NymIcons.Add, null); Spacer(Modifier.width(8.dp)); Text(if (editing == null) "Add proxies" else "Save proxy") }
+                TextButton(onClick = importProxies, modifier = Modifier.testTag("proxy_import")) { Text("Import UTF-8 proxy list") }
                 config.proxies.forEach { raw ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(runCatching { ProxySpec.parse(raw).display }.getOrDefault("Invalid proxy"), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { editing = raw; proxyInput = raw }, modifier = Modifier.testTag("proxy_edit")) { Text("Edit") }
                         IconButton(onClick = { proxyToRemove = raw }) { Icon(NymIcons.DeleteOutline, "Remove proxy") }
                     }
                 }
@@ -412,6 +425,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
                 Text("To keep the phone VPN active while using another route: open your VPN's split-tunneling settings, exclude Nym (dev.atlas.nym), then reconnect. Only the VPN app controls its exclusion list. Always-on VPN with “Block connections without VPN” may block excluded apps.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton(onClick = { runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS)) }.onFailure { vm.message.value = "VPN settings unavailable" } }) { Text("Open Android VPN settings") }
                 TextButton(onClick = { vm.diagnose() }, enabled = !busy, modifier = Modifier.testTag("diagnose")) { Icon(NymIcons.NetworkCheck, null); Spacer(Modifier.width(8.dp)); Text("Test configured routes") }
+                Text("Connectivity test uses example.com, independent of Discord cooldown. It does not check usernames.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 diagnostics.forEach { Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
                 Text("Background checking uses a foreground notification. Android 15+ may stop data-sync services after six background hours. Force-stop, battery restrictions and system termination can interrupt a session; reopen Nym to resume its checkpoint.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -464,7 +478,7 @@ private val destinations = listOf("Home" to NymIcons.Home, "Results" to NymIcons
         confirmButton = { TextButton(onClick = confirm) { Text(action) } }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
 }
 private fun statusLabel(status: SessionStatus?) = when (status) {
-    null -> "Ready to check"; SessionStatus.RUNNING -> "Checking"; SessionStatus.PAUSED -> "Paused"; SessionStatus.STOPPED -> "Stopped"
+    null, SessionStatus.IDLE -> "Ready to check"; SessionStatus.RUNNING -> "Checking"; SessionStatus.PAUSED -> "Paused"; SessionStatus.STOPPING -> "Stopping"; SessionStatus.STOPPED -> "Stopped"
     SessionStatus.COMPLETED -> "Completed"; SessionStatus.COOLDOWN -> "Server cooldown"; SessionStatus.INTERRUPTED -> "Interrupted"; SessionStatus.ERROR -> "Needs attention"
 }
 private fun modeLabel(mode: GenerationMode) = mode.name.lowercase().replaceFirstChar { it.uppercase() }

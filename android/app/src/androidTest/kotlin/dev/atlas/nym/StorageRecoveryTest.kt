@@ -3,10 +3,13 @@ package dev.atlas.nym
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import dev.atlas.nym.core.*
 import dev.atlas.nym.data.AppCrypto
 import dev.atlas.nym.data.SqliteScanStore
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.Assert.*
@@ -17,6 +20,58 @@ import java.util.UUID
 class StorageRecoveryTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val config = ScanConfig(mode = GenerationMode.SEQUENTIAL, length = 2, charset = "ab", limit = 4)
+    @Test fun versionOneCooldownMigrationPreservesCheckpointAndCredentials() = runBlocking<Unit> {
+        val name = "test-${UUID.randomUUID()}.db"
+        val crypto = AppCrypto()
+        val cfg = config.copy(proxies = listOf("socks5://user:secret@localhost:1080"))
+        val deadline = System.currentTimeMillis() + 1_800_000
+        SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(name), null).use { db ->
+            db.execSQL("CREATE TABLE sessions(id TEXT PRIMARY KEY, config TEXT NOT NULL, mode TEXT NOT NULL, length INTEGER NOT NULL, status TEXT NOT NULL, cursor TEXT NOT NULL DEFAULT '0', created INTEGER NOT NULL, elapsed INTEGER NOT NULL DEFAULT 0, checked INTEGER NOT NULL DEFAULT 0, available INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0, requests INTEGER NOT NULL DEFAULT 0, current TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '')")
+            db.execSQL("CREATE TABLE pending(session TEXT NOT NULL, username TEXT NOT NULL, ordinal TEXT NOT NULL, leased INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session,username))")
+            db.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            db.execSQL("INSERT INTO sessions(id,config,mode,length,status,cursor,created,checked,available,requests) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                arrayOf("legacy", crypto.encode(Json.encodeToString(cfg)), cfg.mode.name, cfg.length, "COOLDOWN", "2", 0, 1, 1, 2))
+            db.execSQL("INSERT INTO pending VALUES('legacy','ab','1',1)")
+            db.execSQL("INSERT INTO metadata VALUES('cooldown',?)", arrayOf(deadline.toString()))
+            db.version = 1
+        }
+        SqliteScanStore(context, crypto, name).use { store ->
+            store.recover()
+            val migrated = store.session("legacy")!!
+            assertEquals(SessionStatus.PAUSED, migrated.status)
+            assertEquals(NetworkStatus.RATE_LIMITED, migrated.networkStatus)
+            assertEquals(cfg, migrated.config)
+            assertEquals("2", migrated.cursor)
+            assertEquals(1L, migrated.checked)
+            assertEquals(1L, migrated.available)
+            assertEquals(2L, migrated.requests)
+            assertEquals(deadline, store.cooldownUntil())
+            store.status("legacy", SessionStatus.RUNNING)
+            assertEquals("ab", store.reserve("legacy", CandidateGenerator(cfg))!!.username)
+        }
+        context.deleteDatabase(name)
+    }
+    @Test fun atomicLate429PreservesStopAndMaximumDeadline() = runBlocking<Unit> {
+        val name = "test-${UUID.randomUUID()}.db"
+        SqliteScanStore(context, AppCrypto(), name).use { store ->
+            val session = store.create(config)
+            val deadline = System.currentTimeMillis() + 1_800_000
+            for (status in listOf(SessionStatus.STOPPING, SessionStatus.STOPPED, SessionStatus.PAUSED)) {
+                store.status(session.id, status)
+                store.rateLimited(session.id, CheckResult("aa", CheckStatus.RATE_LIMITED, 429, 1_800_000), deadline)
+                store.rateLimited(session.id, CheckResult("ab", CheckStatus.RATE_LIMITED, 429, 1000), deadline - 1000)
+                assertEquals(status, store.session(session.id)!!.status)
+                assertEquals(deadline, store.cooldownUntil())
+            }
+            assertEquals(6L, store.session(session.id)!!.requests)
+            assertEquals(NetworkStatus.RATE_LIMITED, store.session(session.id)!!.networkStatus)
+            store.status(session.id, SessionStatus.STOPPING)
+            store.recover()
+            assertEquals(SessionStatus.STOPPED, store.session(session.id)!!.status)
+            assertEquals(deadline, store.cooldownUntil())
+        }
+        context.deleteDatabase(name)
+    }
     @Test fun pendingCandidatesSurviveDatabaseReopenAndRecovery() = runBlocking<Unit> {
         val name = "test-${UUID.randomUUID()}.db"
         var store = SqliteScanStore(context, AppCrypto(), name)

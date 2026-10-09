@@ -32,4 +32,17 @@ class ResponseTest {
     @Test fun bodyNonObjectDoesNotCrash() {
         for (body in listOf("null", "true", "[]", "\"string\"")) assertEquals(CheckStatus.RATE_LIMITED, classify(429, body).status)
     }
+    @Test fun thirtyMinuteRetryAfterAndReliableDiscordScopes() {
+        assertEquals(1_800_000L, classify(429, "{}", mapOf("Retry-After" to "1800")).retryAfterMs)
+        assertEquals(RateLimitScope.GLOBAL, classify(429, "{\"global\":true,\"retry_after\":1800}").rateLimitScope)
+        assertEquals(RateLimitScope.GLOBAL, classify(429, "{}", mapOf("X-RateLimit-Global" to "true")).rateLimitScope)
+        assertEquals(RateLimitScope.SHARED, classify(429, "{}", mapOf("X-RateLimit-Scope" to "shared")).rateLimitScope)
+        assertEquals(RateLimitScope.USER, classify(429, "{}", mapOf("X-RateLimit-Scope" to "user")).rateLimitScope)
+        assertEquals(RateLimitScope.UNKNOWN, classify(429, "{\"global\":\"true\"}", mapOf("X-RateLimit-Scope" to "proxy")).rateLimitScope)
+    }
+    @Test fun absoluteResetAndOverflowDoNotShortenCooldown() {
+        assertEquals(1_800_000L, classify(429, "{}", mapOf("X-RateLimit-Reset" to "1800")).retryAfterMs)
+        assertEquals(Long.MAX_VALUE, classify(429, "{}", mapOf("Retry-After" to "1e300")).retryAfterMs)
+        assertEquals(Long.MAX_VALUE, cooldownDeadline(100, Long.MAX_VALUE))
+    }
 }

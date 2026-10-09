@@ -34,6 +34,7 @@ private class MemoryStore(config: ScanConfig) : ScanStore {
     }
     override suspend fun recordAttempt(id: String, result: CheckResult) { item = item.copy(requests = item.requests + 1) }
     override suspend fun status(id: String, status: SessionStatus, detail: String) { item = item.copy(status = status, detail = detail) }
+    override suspend fun network(id: String, status: NetworkStatus) { item = item.copy(networkStatus = status) }
     override suspend fun releasePending(id: String) { pending.replaceAll { _, value -> value.first to false } }
     override suspend fun cooldownUntil() = cooldown
     override suspend fun setCooldown(until: Long) { cooldown = maxOf(cooldown, until) }
@@ -62,7 +63,8 @@ class EngineTest {
         ScanEngine(store, transport) { testScheduler.currentTime }.run("session")
         assertEquals(1, transport.calls)
         assertEquals(120_000, store.cooldown)
-        assertEquals(SessionStatus.COOLDOWN, store.item.status)
+        assertEquals(SessionStatus.PAUSED, store.item.status)
+        assertEquals(NetworkStatus.RATE_LIMITED, store.item.networkStatus)
         assertEquals(listOf("aa"), store.pending.keys.toList())
         assertEquals(0, store.results.size)
     }
@@ -118,5 +120,63 @@ class EngineTest {
         ScanEngine(store, transport) { testScheduler.currentTime }.run("session")
         assertEquals(2, transport.calls)
         assertEquals(CheckStatus.AVAILABLE, store.results["aa"]!!.status)
+    }
+    @Test fun thirtyMinute429RetainsCheckpointAndNeverSchedulesAutomaticResume() = runTest {
+        val store = MemoryStore(base.copy(workers = 4))
+        val transport = FakeTransport { CheckResult(it, CheckStatus.RATE_LIMITED, 429, 1_800_000) }
+        ScanEngine(store, transport) { testScheduler.currentTime }.run("session")
+        assertEquals(0, testScheduler.currentTime)
+        assertEquals(1_800_000, store.cooldown)
+        assertEquals(SessionStatus.PAUSED, store.item.status)
+        assertEquals("1", store.item.cursor)
+        assertEquals(false, store.pending["aa"]!!.second)
+        store.status("session", SessionStatus.STOPPED)
+        testScheduler.advanceTimeBy(1_800_001)
+        assertEquals(SessionStatus.STOPPED, store.item.status)
+        assertEquals(1, transport.calls)
+        val resumed = FakeTransport { CheckResult(it, CheckStatus.AVAILABLE, 200) }
+        ScanEngine(store, resumed) { testScheduler.currentTime }.run("session")
+        assertEquals(4, store.results.size)
+        assertEquals(setOf("aa", "ab", "ba", "bb"), store.results.keys)
+    }
+    @Test fun late429CannotReplaceStoppingOrStoppedLifecycle() = runTest {
+        for (status in listOf(SessionStatus.STOPPING, SessionStatus.STOPPED, SessionStatus.PAUSED)) {
+            val store = MemoryStore(base)
+            val transport = FakeTransport {
+                store.status("session", status)
+                CheckResult(it, CheckStatus.RATE_LIMITED, 429, 1_800_000)
+            }
+            ScanEngine(store, transport) { testScheduler.currentTime }.run("session")
+            assertEquals(status, store.item.status)
+            assertEquals(1_800_000, store.cooldown)
+            assertEquals(false, store.pending["aa"]!!.second)
+        }
+    }
+    @Test fun workerBatch429CancelsOtherRoutesWithoutLosingPendingNames() = runTest {
+        val store = MemoryStore(base.copy(workers = 3))
+        val transport = FakeTransport { name ->
+            if (name == "aa") CheckResult(name, CheckStatus.AVAILABLE, 200)
+            else { delay(if (name == "ab") 1000 else 2000); CheckResult(name, if (name == "ab") CheckStatus.RATE_LIMITED else CheckStatus.AVAILABLE, if (name == "ab") 429 else 200, 1_800_000) }
+        }
+        ScanEngine(store, transport) { testScheduler.currentTime }.run("session")
+        assertEquals(setOf("aa"), store.results.keys)
+        assertEquals(setOf("ab", "ba", "bb"), store.pending.keys)
+        assertTrue(store.pending.values.none { it.second })
+        assertEquals(SessionStatus.PAUSED, store.item.status)
+    }
+    @Test fun cancellationInterruptsLongCadenceAndRetryDelays() = runTest {
+        for (networkError in listOf(false, true)) {
+            val store = MemoryStore(base.copy(intervalMs = 300_000))
+            val transport = FakeTransport { CheckResult(it, if (networkError) CheckStatus.NETWORK_ERROR else CheckStatus.AVAILABLE) }
+            val job = launch { ScanEngine(store, transport) { testScheduler.currentTime }.run("session") }
+            runCurrent()
+            store.status("session", SessionStatus.STOPPING)
+            job.cancelAndJoin()
+            store.status("session", SessionStatus.STOPPED)
+            assertEquals(0, testScheduler.currentTime)
+            assertTrue(transport.canceled)
+            assertEquals(1, transport.calls)
+            assertTrue(store.pending.values.none { it.second })
+        }
     }
 }

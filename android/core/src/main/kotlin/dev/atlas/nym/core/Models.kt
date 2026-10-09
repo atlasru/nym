@@ -7,7 +7,10 @@ const val DISCORD_ENDPOINT = "https://discord.com/api/v9/unique-username/usernam
 
 @Serializable enum class GenerationMode { SEQUENTIAL, RANDOM, PATTERN, DICTIONARY }
 @Serializable enum class CheckStatus { AVAILABLE, UNAVAILABLE, INVALID, UNKNOWN, NETWORK_ERROR, RATE_LIMITED }
-@Serializable enum class SessionStatus { RUNNING, PAUSED, STOPPED, COMPLETED, COOLDOWN, INTERRUPTED, ERROR }
+// COOLDOWN is read only for compatibility with 0.1.0 checkpoints.
+@Serializable enum class SessionStatus { IDLE, RUNNING, PAUSED, STOPPING, STOPPED, COMPLETED, COOLDOWN, INTERRUPTED, ERROR }
+@Serializable enum class NetworkStatus { READY, REQUESTING, RATE_LIMITED, OFFLINE, ERROR }
+enum class RateLimitScope { GLOBAL, USER, SHARED, UNKNOWN }
 
 @Serializable data class ScanConfig(
     val mode: GenerationMode = GenerationMode.RANDOM,
@@ -58,6 +61,7 @@ data class CheckResult(
     val route: String = "Direct",
     val latencyMs: Long = 0,
     val checkedAt: Long = System.currentTimeMillis(),
+    val rateLimitScope: RateLimitScope = RateLimitScope.UNKNOWN,
 )
 
 data class Candidate(val username: String, val ordinal: String)
@@ -74,6 +78,7 @@ data class Session(
     val requests: Long = 0,
     val current: String = "",
     val detail: String = "",
+    val networkStatus: NetworkStatus = NetworkStatus.READY,
 )
 
 interface ScanStore {
@@ -82,11 +87,22 @@ interface ScanStore {
     suspend fun complete(id: String, candidate: Candidate, result: CheckResult)
     suspend fun recordAttempt(id: String, result: CheckResult)
     suspend fun status(id: String, status: SessionStatus, detail: String = "")
+    suspend fun network(id: String, status: NetworkStatus)
+    /** Persist restriction + attempt + paused checkpoint atomically in durable stores. */
+    suspend fun rateLimited(id: String, result: CheckResult, until: Long) {
+        setCooldown(until)
+        recordAttempt(id, result)
+        network(id, NetworkStatus.RATE_LIMITED)
+        if (session(id)?.status == SessionStatus.RUNNING) status(id, SessionStatus.PAUSED, result.detail)
+    }
     suspend fun releasePending(id: String)
     suspend fun cooldownUntil(): Long
     suspend fun setCooldown(until: Long)
     suspend fun addElapsed(id: String, milliseconds: Long)
 }
+
+fun cooldownDeadline(now: Long, waitMs: Long): Long =
+    if (waitMs > Long.MAX_VALUE - now.coerceAtLeast(0)) Long.MAX_VALUE else now + waitMs.coerceAtLeast(0)
 
 interface CheckTransport : AutoCloseable {
     suspend fun check(username: String): CheckResult

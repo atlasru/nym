@@ -52,6 +52,7 @@ class MobileWorkflowTest {
             ScanService.send(rule.activity, ScanService.STOP, id)
             rule.waitUntil(10_000) { graph.serviceSession.value == null }
         }
+        clearMockCooldown(rule.activity)
         server.shutdown()
     }
     private fun start(waitRunning: Boolean = true) {
@@ -133,26 +134,37 @@ class MobileWorkflowTest {
     }
     @Test fun server429StopsAllWorkersAndPersistsCooldown() {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(429).setHeader("Retry-After", "5").setBody("{\"retry_after\":5}")
+            override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(429).setHeader("Retry-After", "1800").setBody("{\"retry_after\":1800}")
         }
         start(false)
         rule.waitUntil(10_000) { server.requestCount > 0 }
         rule.waitUntil(10_000) { graph.serviceSession.value == null }
         val session = runBlocking { graph.store.sessions().first() }
-        assertEquals(SessionStatus.COOLDOWN, session.status)
+        assertEquals(SessionStatus.PAUSED, session.status)
+        assertEquals(NetworkStatus.RATE_LIMITED, session.networkStatus)
         assertEquals(1, server.requestCount)
-        assertTrue(runBlocking { graph.store.cooldownUntil() } > System.currentTimeMillis())
+        val deadline = runBlocking { graph.store.cooldownUntil() }
+        assertTrue(deadline > System.currentTimeMillis())
         rule.onNodeWithTag("resume").assertIsNotEnabled()
+        rule.onNodeWithTag("stop").assertIsEnabled()
         val manager = rule.activity.getSystemService(NotificationManager::class.java)
+        // NotificationManager publishes updates asynchronously, especially on API 36.
+        rule.waitUntil(5000) {
+            manager.activeNotifications.firstOrNull { it.id == ScanService.NOTIFICATION }?.notification
+                ?.let { it.extras.getString(ScanService.SESSION_EXTRA) == session.id &&
+                    it.extras.getString(android.app.Notification.EXTRA_TITLE)?.contains("rate limited") == true &&
+                    it.actions.any { action -> action.title.toString() == "Resume" } } == true
+        }
         manager.activeNotifications.first { it.id == ScanService.NOTIFICATION }.notification
             .actions.first { it.title.toString() == "Resume" }.actionIntent.send()
         Thread.sleep(300)
         rule.waitUntil(10_000) {
             manager.activeNotifications.firstOrNull { it.id == ScanService.NOTIFICATION }?.notification
-                ?.extras?.getString(android.app.Notification.EXTRA_TITLE)?.contains("cooldown") == true
+                ?.let { it.extras.getString(ScanService.SESSION_EXTRA) == session.id &&
+                    it.extras.getString(android.app.Notification.EXTRA_TITLE)?.contains("rate limited") == true } == true
         }
         assertEquals(1, server.requestCount)
-        Thread.sleep(5200)
+        assertEquals(deadline, runBlocking { graph.store.cooldownUntil() })
     }
     @Test fun measuredCpuAndMemoryOnEmulator() {
         val idleCpu = Process.getElapsedCpuTime()

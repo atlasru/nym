@@ -1,6 +1,5 @@
 package dev.atlas.nym.core
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -16,20 +15,22 @@ import kotlin.coroutines.coroutineContext
 
 /** Bounded batches, serialized aggregate cadence, one-request startup gate. */
 class ScanEngine(private val store: ScanStore, private val transport: CheckTransport, private val clock: () -> Long = System::currentTimeMillis) {
+    private class HaltChecking : RuntimeException()
     private val pace = Mutex()
     private var nextAt = 0L
     private val halt = AtomicBoolean(false)
 
     suspend fun run(id: String) {
-        val session = requireNotNull(store.session(id))
-        val config = session.config
-        config.validate()
-        check(store.cooldownUntil() <= clock()) { "Server cooldown is still active" }
-        val generator = CandidateGenerator(config)
-        val random = Random(config.seed)
-        var warmup = false
-        store.status(id, SessionStatus.RUNNING)
         try {
+            val session = requireNotNull(store.session(id))
+            val config = session.config
+            config.validate()
+            check(store.cooldownUntil() <= clock()) { "Server cooldown is still active" }
+            val generator = CandidateGenerator(config)
+            val random = Random(config.seed)
+            var warmup = false
+            store.status(id, SessionStatus.RUNNING)
+            store.network(id, NetworkStatus.READY)
             while (!halt.get()) {
                 coroutineContext.ensureActive()
                 val candidates = buildList {
@@ -48,10 +49,12 @@ class ScanEngine(private val store: ScanStore, private val transport: CheckTrans
                 }
                 if (results.any { it?.status in setOf(CheckStatus.AVAILABLE, CheckStatus.UNAVAILABLE, CheckStatus.INVALID) }) warmup = true
             }
+        } catch (_: HaltChecking) {
+            // coroutineScope has canceled and joined the whole batch; no cooldown
+            // timer survives this run. Checking resumes only on an explicit Start.
         } finally {
             transport.cancel()
-            withContext(NonCancellable) { store.releasePending(id) }
-            transport.close()
+            try { withContext(NonCancellable) { store.releasePending(id) } } finally { transport.close() }
         }
     }
 
@@ -72,21 +75,22 @@ class ScanEngine(private val store: ScanStore, private val transport: CheckTrans
                 }
             }
             if (!allowed) return null
+            coroutineContext.ensureActive()
+            store.network(id, NetworkStatus.REQUESTING)
+            if (halt.get() || store.cooldownUntil() > clock()) return null
             val result = transport.check(candidate.username)
             if (halt.get() && result.status != CheckStatus.RATE_LIMITED) return null
             if (result.status == CheckStatus.RATE_LIMITED) {
                 halt.set(true)
                 // Persist the cooldown before releasing any route or candidate.
                 withContext(NonCancellable) {
-                    val now = clock()
-                    val wait = result.retryAfterMs ?: 60_000L
-                    store.setCooldown(if (wait > Long.MAX_VALUE - now) Long.MAX_VALUE else now + wait)
-                    store.recordAttempt(id, result)
-                    store.status(id, SessionStatus.COOLDOWN, result.detail)
+                    store.rateLimited(id, result, cooldownDeadline(clock(), result.retryAfterMs ?: 60_000L))
                 }
                 transport.cancel()
-                return result
+                throw HaltChecking()
             }
+            coroutineContext.ensureActive()
+            store.network(id, if (result.status == CheckStatus.NETWORK_ERROR) NetworkStatus.ERROR else NetworkStatus.READY)
             store.recordAttempt(id, result)
             val retriable = result.status == CheckStatus.NETWORK_ERROR || (result.status == CheckStatus.UNKNOWN && result.httpStatus in 500..599)
             if (retriable && attempt < config.retries && !halt.get()) {
@@ -96,8 +100,10 @@ class ScanEngine(private val store: ScanStore, private val transport: CheckTrans
             store.complete(id, candidate, result)
             if (result.httpStatus in setOf(401, 403) || result.detail.contains("captcha", ignoreCase = true)) {
                 halt.set(true)
+                store.network(id, NetworkStatus.ERROR)
                 store.status(id, SessionStatus.ERROR, "Access denied / verification required. Checking stopped. ${result.detail}")
                 transport.cancel()
+                throw HaltChecking()
             }
             return result
         }
