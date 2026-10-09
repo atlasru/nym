@@ -1,6 +1,8 @@
 package dev.atlas.nym.core
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -82,7 +84,7 @@ class HttpTransport(
         val started = System.nanoTime()
         try {
             val body = JsonObject(mapOf("username" to JsonPrimitive(username))).toString()
-            val request = Request.Builder().url(endpoint).header("User-Agent", "NymMobile/0.1.0 (Android)")
+            val request = Request.Builder().url(endpoint).header("User-Agent", "NymMobile/0.1.1 (Android)")
                 .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
             val result = route.client.newCall(request).await().use { response ->
                 val text = response.boundedBody()
@@ -98,30 +100,24 @@ class HttpTransport(
             return CheckResult(username, CheckStatus.NETWORK_ERROR,
                 detail = "${failure.javaClass.simpleName}: ${sanitize(failure.message.orEmpty())}", route = route.display,
                 latencyMs = (System.nanoTime() - started) / 1_000_000)
-        } finally { mutex.withLock { route.leased = false } }
+        } finally { withContext(NonCancellable) { mutex.withLock { route.leased = false } } }
     }
 
-    suspend fun diagnose(onRateLimit: suspend (Long) -> Unit = {}): List<String> {
+    /** Connectivity only. This target is independent of Discord's checking limits. */
+    suspend fun diagnose(endpoint: String = "https://example.com/"): List<String> {
         val diagnostics = mutableListOf<String>()
         for (route in routes) {
             if (diagnostics.isNotEmpty()) delay(cadence)
             val start = System.nanoTime()
-            var limited = false
             try {
-                route.client.newCall(Request.Builder().url("https://discord.com/api/v9/gateway").get().build()).await().use {
+                route.client.newCall(Request.Builder().url(endpoint).get().build()).await().use {
                     val delay = (System.nanoTime() - start) / 1_000_000
                     diagnostics += "${route.display} · HTTP ${it.code} · ${delay} ms"
-                    if (it.code == 429) {
-                        val result = ResponseClassifier.classify("diagnostic", it.code, it.boundedBody(), it.headers.toMap())
-                        onRateLimit(result.retryAfterMs ?: 60_000)
-                        diagnostics += "Server cooldown · all diagnostics stopped"
-                        limited = true
-                    }
+                    if (it.code == 429) return diagnostics + "Connectivity target rate limited · diagnostics stopped"
                 }
             } catch (failure: IOException) {
                 diagnostics += "${route.display} · ${failure.javaClass.simpleName}: ${sanitize(failure.message.orEmpty())}"
             }
-            if (limited) break
         }
         return diagnostics
     }

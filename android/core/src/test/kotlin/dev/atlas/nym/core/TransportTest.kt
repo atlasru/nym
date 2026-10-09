@@ -1,14 +1,52 @@
 package dev.atlas.nym.core
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 import org.junit.Test
 
 class TransportTest {
+    @Test fun stopCancelsPendingHeadersWithoutWaitingForHttpTimeout() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            HttpTransport(ScanConfig(timeoutSeconds = 60), server.url("/check").toString()).use { transport ->
+                val job = async(Dispatchers.IO) { transport.check("name") }
+                assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+                withTimeout(1000) { transport.cancel(); job.cancelAndJoin() }
+                assertTrue(job.isCancelled)
+            }
+            assertEquals(1, server.requestCount)
+        }
+    }
+    @Test fun stopCancelsPendingBodyAndClosedTransportCannotEmitMoreRequests() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("{\"taken\":false}").setBodyDelay(30, TimeUnit.SECONDS))
+            HttpTransport(ScanConfig(timeoutSeconds = 60), server.url("/check").toString()).use { transport ->
+                val job = async(Dispatchers.IO) { transport.check("name") }
+                assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+                withTimeout(1000) { transport.cancel(); job.cancelAndJoin() }
+                assertFailsWith<java.io.IOException> { transport.check("other") }
+            }
+            assertEquals(1, server.requestCount)
+        }
+    }
+    @Test fun connectivityDiagnosticUsesItsOwnTarget() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(204))
+            HttpTransport(ScanConfig(), server.url("/check").toString()).use { transport ->
+                assertTrue(transport.diagnose(server.url("/connectivity").toString()).single().contains("HTTP 204"))
+            }
+            assertEquals("/connectivity", server.takeRequest(1, TimeUnit.SECONDS)!!.path)
+        }
+    }
     @Test fun realHttpRequestUsesDesktopEndpointPayload() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("{\"taken\":false}"))

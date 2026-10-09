@@ -139,17 +139,19 @@ class MobileWorkflowTest {
         rule.waitUntil(10_000) { server.requestCount > 0 }
         rule.waitUntil(10_000) { graph.serviceSession.value == null }
         val session = runBlocking { graph.store.sessions().first() }
-        assertEquals(SessionStatus.COOLDOWN, session.status)
+        assertEquals(SessionStatus.PAUSED, session.status)
+        assertEquals(NetworkStatus.RATE_LIMITED, session.networkStatus)
         assertEquals(1, server.requestCount)
         assertTrue(runBlocking { graph.store.cooldownUntil() } > System.currentTimeMillis())
         rule.onNodeWithTag("resume").assertIsNotEnabled()
+        rule.onNodeWithTag("stop").assertIsEnabled()
         val manager = rule.activity.getSystemService(NotificationManager::class.java)
         manager.activeNotifications.first { it.id == ScanService.NOTIFICATION }.notification
             .actions.first { it.title.toString() == "Resume" }.actionIntent.send()
         Thread.sleep(300)
         rule.waitUntil(10_000) {
             manager.activeNotifications.firstOrNull { it.id == ScanService.NOTIFICATION }?.notification
-                ?.extras?.getString(android.app.Notification.EXTRA_TITLE)?.contains("cooldown") == true
+                ?.extras?.getString(android.app.Notification.EXTRA_TITLE)?.contains("rate limited") == true
         }
         assertEquals(1, server.requestCount)
         Thread.sleep(5200)

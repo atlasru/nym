@@ -14,9 +14,11 @@ import dev.atlas.nym.core.CheckStatus
 import dev.atlas.nym.core.HttpTransport
 import dev.atlas.nym.core.Session
 import dev.atlas.nym.core.SessionStatus
+import dev.atlas.nym.core.ProxySpec
 import dev.atlas.nym.data.Preferences
 import dev.atlas.nym.data.StoredResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,6 +107,34 @@ class NymViewModel(application: Application, private val saved: SavedStateHandle
         if (checkpoint) message.value = "Saving checkpoint…"
     }
     fun stop() { current.value?.let { ScanService.send(getApplication(), ScanService.STOP, it.id) } }
+    fun addProxies(text: String, replacing: String? = null): Boolean {
+        return runCatching {
+            val entries = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.distinct().toList()
+            require(entries.isNotEmpty()) { "Enter at least one proxy" }
+            entries.forEach { ProxySpec.parse(it) }
+            val config = preferences.value.scan
+            val proxies = (config.proxies.filter { it != replacing } + entries).distinct()
+            require(proxies.size <= 100) { "Maximum 100 proxies" }
+            update(preferences.value.copy(scan = config.copy(proxies = proxies)))
+        }.onFailure { message.value = it.message }.isSuccess
+    }
+    fun importProxies(uri: Uri) = work {
+        val text = withContext(Dispatchers.IO) {
+            getApplication<Application>().contentResolver.openInputStream(uri)?.use {
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (output.size() <= 512_000) {
+                    val count = it.read(buffer)
+                    if (count < 0) break
+                    output.write(buffer, 0, count)
+                }
+                val bytes = output.toByteArray()
+                require(bytes.size <= 512_000) { "Proxy list exceeds 512 KB" }
+                bytes.toString(Charsets.UTF_8)
+            } ?: error("Cannot read proxy list")
+        }
+        if (addProxies(text)) { graph.settings.save(preferences.value); message.value = "Proxies imported" }
+    }
     fun clear() = work { check(graph.serviceSession.value == null) { "Pause the active session first" }; graph.store.clearHistory(); saved["session"] = null; message.value = "History cleared" }
     fun sessionResults(session: Session) { query.value = query.value.copy(sessionId = session.id, status = null); navigate("Results") }
     fun importDictionary(uri: Uri) = work {
@@ -134,17 +164,16 @@ class NymViewModel(application: Application, private val saved: SavedStateHandle
         message.value = "CSV exported"
     }
     fun diagnose() = work {
-        check(graph.serviceSession.value == null) { "Pause checking before testing routes" }
-        check(graph.store.cooldownUntil() <= System.currentTimeMillis()) { "Diagnostics wait for server cooldown too" }
         preferences.value.scan.validate()
         val transport = HttpTransport(preferences.value.scan)
-        try { diagnostics.value = transport.diagnose { graph.store.setCooldown(System.currentTimeMillis() + it) } } finally { transport.close() }
+        try { diagnostics.value = transport.diagnose(graph.diagnosticEndpoint) } finally { transport.close() }
     }
     fun work(block: suspend () -> Unit) {
         if (busy.value) return
         busy.value = true
         viewModelScope.launch {
-            try { graph.ready.await(); block() } catch (failure: Exception) { message.value = failure.message ?: failure.javaClass.simpleName }
+            try { graph.ready.await(); block() } catch (canceled: CancellationException) { throw canceled }
+            catch (failure: Exception) { message.value = failure.message ?: failure.javaClass.simpleName }
             finally { busy.value = false }
         }
     }

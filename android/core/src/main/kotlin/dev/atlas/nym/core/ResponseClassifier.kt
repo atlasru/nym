@@ -20,9 +20,19 @@ object ResponseClassifier {
             val date = header?.let { runCatching { (ZonedDateTime.parse(it, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() - now).coerceAtLeast(0) }.getOrNull() }
             val bodyDelay = number("retry_after")?.takeIf { it.isFinite() && it >= 0 }?.let { ceil(it * 1000).toLong() }
             val reset = normalized["x-ratelimit-reset-after"]?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }?.let { ceil(it * 1000).toLong() }
-            val delay = listOfNotNull(seconds, date, bodyDelay, reset).maxOrNull() ?: 60_000L
+            val absoluteReset = normalized["x-ratelimit-reset"]?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }
+                ?.let { (ceil(it * 1000).toLong() - now).coerceAtLeast(0) }
+            val global = runCatching { json?.get("global")?.jsonPrimitive?.takeIf { !it.isString }?.booleanOrNull }.getOrNull() == true
+                || normalized["x-ratelimit-global"].equals("true", ignoreCase = true)
+            val scope = if (global) RateLimitScope.GLOBAL else when (normalized["x-ratelimit-scope"]?.lowercase()) {
+                "global" -> RateLimitScope.GLOBAL
+                "user" -> RateLimitScope.USER
+                "shared" -> RateLimitScope.SHARED
+                else -> RateLimitScope.UNKNOWN
+            }
+            val delay = listOfNotNull(seconds, date, bodyDelay, reset, absoluteReset).maxOrNull() ?: 60_000L
             return CheckResult(username, CheckStatus.RATE_LIMITED, code, delay.coerceAtLeast(1000),
-                "HTTP 429 · scope=${normalized["x-ratelimit-scope"] ?: "unspecified"} · all routes paused")
+                "HTTP 429 · scope=${scope.name.lowercase()} · all checking routes paused", rateLimitScope = scope)
         }
         if (code in 200..299) {
             val taken = runCatching { json?.get("taken")?.jsonPrimitive?.takeIf { !it.isString }?.booleanOrNull }.getOrNull()

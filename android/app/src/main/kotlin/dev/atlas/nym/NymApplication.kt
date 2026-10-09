@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
 import dev.atlas.nym.core.CheckResult
+import dev.atlas.nym.core.NetworkStatus
 
 class NymApplication : Application() {
     lateinit var graph: AppGraph
@@ -31,10 +32,16 @@ class AppGraph(application: Application) {
     val serviceSession = MutableStateFlow<String?>(null)
     val requestRate = MutableStateFlow(0.0)
     val activeRoute = MutableStateFlow("Direct")
+    val networkStatus = MutableStateFlow(NetworkStatus.READY)
+    var diagnosticEndpoint = "https://example.com/"
     val network = NetworkMonitor(application).flow.stateIn(scope, SharingStarted.WhileSubscribed(5000), NetworkRoute())
     // Instrumentation injects a loopback transport. No endpoint override in the product UI.
     var transportFactory: (ScanConfig) -> CheckTransport = { config ->
-        NetworkAwareTransport(HttpTransport(config)) { network.first { it.online } }
+        NetworkAwareTransport(HttpTransport(config)) {
+            if (!network.value.online) networkStatus.value = NetworkStatus.OFFLINE
+            network.first { it.online }
+            networkStatus.value = NetworkStatus.REQUESTING
+        }
     }
 }
 class NetworkAwareTransport(val http: HttpTransport, private val awaitNetwork: suspend () -> Unit) : CheckTransport {
