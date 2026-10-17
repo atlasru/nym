@@ -26,8 +26,16 @@ from .storage import Storage
 class MainMenuScreen(Screen):
     def compose(self) -> ComposeResult:
         with Vertical(id="menu-card"):
-            yield Static("✦  NYM", classes="brand")
-            yield Static("fast, local username availability scanner", classes="muted")
+            yield Static(
+                "███╗   ██╗██╗   ██╗███╗   ███╗\n"
+                "████╗  ██║╚██╗ ██╔╝████╗ ████║\n"
+                "██╔██╗ ██║ ╚████╔╝ ██╔████╔██║\n"
+                "██║╚██╗██║  ╚██╔╝  ██║╚██╔╝██║\n"
+                "██║ ╚████║   ██║   ██║ ╚═╝ ██║\n"
+                "╚═╝  ╚═══╝   ╚═╝   ╚═╝     ╚═╝",
+                classes="brand",
+            )
+            yield Static("LOCAL USERNAME SCANNER  /  LIVE TERMINAL", classes="muted")
             yield Button("New scan", id="new-scan", variant="primary")
             yield Button("Resume last config", id="resume")
             yield Button("Results", id="results")
@@ -180,7 +188,7 @@ class ScanScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="panel wide scan-panel"):
-            yield Static("✦  Nym scan", classes="title")
+            yield Static("NYM  /  LIVE SCAN", classes="title")
             yield Static("Starting…", id="scan-status", classes="muted")
             yield Static("", id="scan-stats")
             yield Static("", id="hit-flash")
@@ -392,12 +400,12 @@ class ScanScreen(Screen):
             self.result_times.popleft()
 
         if result.status is CheckStatus.AVAILABLE:
-            log.write(f"[bold green]◆ AVAILABLE[/]  {result.username}")
+            log.write(f"[bold #e0af68]AVAILABLE[/]   {result.username}")
             flash = self.query_one("#hit-flash", Static)
-            flash.update(f"◆  AVAILABLE  {result.username}")
+            flash.update(f"AVAILABLE  ·  {result.username}")
             self.set_timer(0.65, lambda: flash.update(""))
         elif result.status is CheckStatus.TAKEN:
-            log.write(f"[dim]· taken[/]      {result.username}")
+            log.write(f"[#79694f]TAKEN[/]       {result.username}")
         elif result.status is CheckStatus.RATE_LIMITED:
             retry = ""
             if result.retry_after is not None:
@@ -441,14 +449,12 @@ class ScanScreen(Screen):
                 f"◇ Rate limited · retry in {retry_remaining:.1f}s"
             )
         text = (
-            f"{activity}  {self.current_username}\n"
-            f"Checked {stats.checked:,}   Available {stats.available:,}   "
-            f"Taken {stats.taken:,}\n"
-            f"Invalid {stats.invalid:,}   "
-            f"Errors {stats.network_errors + stats.unknown:,}   "
-            f"429 {self.engine.rate_limit_events:,}\n"
-            f"Rate {rate:.1f}/s   Queue ≤ {self.scanner.queue_size}   "
-            f"Proxies {proxy_text}   Runtime {legacy._format_duration(elapsed)}"
+            f"{rate:5.1f} rq/s    {stats.checked:,} checked    "
+            f"{stats.available:,} hits    {self.engine.rate_limit_events:,} rate limits\\n"
+            f"{activity}  checking {self.current_username}    "
+            f"queue {self.scanner.queue_size}    proxies {proxy_text}    "
+            f"runtime {legacy._format_duration(elapsed)}\\n"
+            "Esc stop    Space pause / resume    ↑ / ↓ or mouse wheel scroll history"
         )
         self.query_one("#scan-stats", Static).update(text)
 
