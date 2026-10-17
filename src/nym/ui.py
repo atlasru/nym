@@ -450,10 +450,10 @@ class ScanScreen(Screen):
             )
         text = (
             f"{rate:5.1f} rq/s    {stats.checked:,} checked    "
-            f"{stats.available:,} hits    {self.engine.rate_limit_events:,} rate limits\\n"
+            f"{stats.available:,} hits    {self.engine.rate_limit_events:,} rate limits\n"
             f"{activity}  checking {self.current_username}    "
             f"queue {self.scanner.queue_size}    proxies {proxy_text}    "
-            f"runtime {legacy._format_duration(elapsed)}\\n"
+            f"runtime {legacy._format_duration(elapsed)}\n"
             "Esc stop    Space pause / resume    ↑ / ↓ or mouse wheel scroll history"
         )
         self.query_one("#scan-stats", Static).update(text)
