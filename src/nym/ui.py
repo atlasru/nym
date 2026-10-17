@@ -188,7 +188,16 @@ class ScanScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="panel wide scan-panel"):
-            yield Static("NYM  /  LIVE SCAN", classes="title")
+            yield Static(
+                "███╗   ██╗██╗   ██╗███╗   ███╗\n"
+                "████╗  ██║╚██╗ ██╔╝████╗ ████║\n"
+                "██╔██╗ ██║ ╚████╔╝ ██╔████╔██║\n"
+                "██║╚██╗██║  ╚██╔╝  ██║╚██╔╝██║\n"
+                "██║ ╚████║   ██║   ██║ ╚═╝ ██║\n"
+                "╚═╝  ╚═══╝   ╚═╝   ╚═╝     ╚═╝",
+                classes="brand",
+            )
+            yield Static("LIVE SCAN  /  USERNAME AVAILABILITY", classes="title")
             yield Static("Starting…", id="scan-status", classes="muted")
             yield Static("", id="scan-stats")
             yield Static("", id="hit-flash")
