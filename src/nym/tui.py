@@ -571,8 +571,8 @@ class NymApp(App[None]):
     TITLE = "Nym"
     CSS = """
     Screen {
-        background: #0b0c0e;
-        color: #e8e6df;
+        background: #080808;
+        color: #d7d0c2;
         align: center middle;
         overflow-y: auto;
     }
@@ -586,15 +586,15 @@ class NymApp(App[None]):
     }
 
     #menu-card, .panel {
-        width: 72;
+        width: 76;
         height: auto;
-        max-height: 95%;
+        max-height: 96%;
         padding: 1 3;
-        background: #111318;
+        background: #090909;
     }
 
     .wide {
-        width: 96;
+        width: 112;
     }
 
     .scan-panel {
@@ -602,7 +602,7 @@ class NymApp(App[None]):
     }
 
     .brand {
-        height: 3;
+        height: 7;
         content-align: center middle;
         text-align: center;
         color: #e0af68;
@@ -613,6 +613,7 @@ class NymApp(App[None]):
         height: 2;
         color: #e0af68;
         text-style: bold;
+        border-bottom: solid #57452c;
     }
 
     .muted, .hint {
@@ -633,20 +634,20 @@ class NymApp(App[None]):
     Button {
         width: 100%;
         margin: 0 0 1 0;
-        background: #171a20;
+        background: #101010;
         color: #e8e6df;
         border: none;
     }
 
     Button:hover, Button:focus {
-        background: #242833;
+        background: #211b12;
         color: #e0af68;
     }
 
     Input, Select {
         margin-bottom: 1;
-        background: #0e1014;
-        border: tall #242833;
+        background: #0c0c0c;
+        border: tall #3d3325;
     }
 
     .row {
@@ -684,22 +685,23 @@ class NymApp(App[None]):
         height: 1fr;
         min-height: 12;
         background: #0e1014;
-        border: tall #1b1e26;
+        border: tall #322a20;
         padding: 1 2;
         margin-bottom: 1;
     }
 
     #scan-stats {
-        min-height: 7;
+        min-height: 5;
         padding: 1 2;
         background: #0e1014;
-        color: #c6c8d1;
+        color: #d0c3ae;
+        border-top: solid #a27b42;
     }
 
     #hit-flash {
         height: 2;
         content-align: center middle;
-        color: #9ece6a;
+        color: #e0af68;
         text-style: bold;
     }
     """
